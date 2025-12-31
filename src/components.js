@@ -63,14 +63,18 @@ export function renderHeader(state) {
   const isDark = currentTheme === 'dark';
 
   // Mode label
-  let modeLabel = 'Cached';
-  let modeClass = 'mode-cached';
-  if (isLive) {
-    modeLabel = 'Live';
-    modeClass = 'mode-live';
-  } else if (state.mode === 'mock') {
+  // Users shouldn't see "Cached" - it looks like old data.
+  // We treat cached Gist data as "Live" for the end user.
+  let modeLabel = 'Live';
+  let modeClass = 'mode-live';
+
+  if (state.mode === 'mock') {
     modeLabel = 'Mock';
     modeClass = 'mode-mock';
+  } else if (state.mode === 'cached' && state.isAdmin) {
+    // Only admins need to know it's actually cached
+    modeLabel = 'Cached';
+    modeClass = 'mode-cached';
   }
 
   return `
