@@ -50,6 +50,7 @@ function formatTimestamp(date) {
 // ============================================
 
 export function renderHeader(state) {
+  const isCached = state.mode === 'cached';
   const isLive = state.mode === 'live';
   const timestamp = formatTimestamp(state.lastUpdated);
   const totalMatches = state.totalAnalyzed || 0;
@@ -60,6 +61,17 @@ export function renderHeader(state) {
   // Get current theme from DOM
   const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
   const isDark = currentTheme === 'dark';
+
+  // Mode label
+  let modeLabel = 'Cached';
+  let modeClass = 'mode-cached';
+  if (isLive) {
+    modeLabel = 'Live';
+    modeClass = 'mode-live';
+  } else if (state.mode === 'mock') {
+    modeLabel = 'Mock';
+    modeClass = 'mode-mock';
+  }
 
   return `
     <header class="header">
@@ -72,32 +84,30 @@ export function renderHeader(state) {
       </div>
       
       <div class="header-actions">
+        ${state.isAdmin ? `<span style="background: var(--status-high); color: white; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600;">🔐 ADMIN</span>` : ''}
+        
         <!-- Theme Toggle -->
         <button class="btn-icon" id="theme-toggle" title="Toggle Theme">
           ${isDark ? '☀️' : '🌙'}
         </button>
 
-        <!-- Mode Toggle -->
-        <button 
-          class="mode-toggle-btn ${isLive ? 'mode-live' : 'mode-mock'}" 
-          id="mode-toggle"
-          title="${isLive ? 'Using live data from API-Football + AI' : 'Using mock data'}"
-        >
+        <!-- Mode Indicator -->
+        <span class="mode-toggle-btn ${modeClass}" style="cursor: default;">
           <span class="indicator"></span>
-          <span>${isLive ? 'Live Data' : 'Mock Data'}</span>
-        </button>
+          <span>${modeLabel}</span>
+        </span>
 
-        <!-- Refresh Button -->
-        <button class="btn-icon" id="refresh-btn" title="Refresh predictions">
+        <!-- Refresh Button (shown for all, hidden via JS for non-admin) -->
+        <button class="btn-icon" id="refresh-btn" title="Admin: Refresh predictions">
           🔄
         </button>
       </div>
 
       ${state.lastUpdated ? `
         <div class="header-meta">
-          <span class="meta-item">Last scan: <strong>${timestamp}</strong></span>
+          <span class="meta-item">Last updated: <strong>${timestamp}</strong></span>
           <span class="meta-divider">|</span>
-          <span class="meta-item">Analyzed: <strong>${totalMatches}</strong></span>
+          <span class="meta-item">Matches: <strong>${totalMatches}</strong></span>
           <span class="meta-divider">|</span>
           <span class="meta-item highlight">+EV Found: ${positiveEV}</span>
         </div>

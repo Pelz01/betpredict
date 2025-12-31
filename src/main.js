@@ -1,7 +1,6 @@
 /**
- * Sharpshooter EV Dashboard
+ * BetPredict - AI-Powered Edge Finder
  * Main Application Entry Point
- * Enhanced UX with Confidence Sections
  */
 
 import './styles.css';
@@ -15,6 +14,7 @@ import {
 import { fetchLiveMatches, testConnection } from './services/dataAggregator.js';
 import { clearCache as clearApiCache } from './services/apiFootballService.js';
 import { clearPredictionCache } from './services/oracleService.js';
+import { readFromGist, writeToGist, isGistConfigured } from './services/gistService.js';
 import {
   renderHeader,
   renderConfidenceSection,
@@ -22,6 +22,18 @@ import {
   renderLoadingState,
   renderErrorState
 } from './components.js';
+
+// ============================================
+// ADMIN PASSKEY CHECK
+// ============================================
+
+const ADMIN_PASSKEY = import.meta.env.VITE_ADMIN_PASSKEY || 'betpredict2024';
+const urlParams = new URLSearchParams(window.location.search);
+const isAdmin = urlParams.get('admin') === ADMIN_PASSKEY;
+
+if (isAdmin) {
+  console.log('🔐 Admin mode activated');
+}
 
 // ============================================
 // APPLICATION STATE
@@ -43,7 +55,8 @@ const state = {
   lowSectionExpanded: false,
   isLoading: false,
   error: null,
-  mode: 'live',
+  mode: 'cached', // 'cached', 'live', 'mock'
+  isAdmin: isAdmin,
 
   // Metadata
   lastUpdated: null,
@@ -275,18 +288,27 @@ function attachEventListeners() {
     modeToggle.addEventListener('click', toggleMode);
   }
 
-  // Refresh button
+  // Refresh button (admin only)
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) {
-    refreshBtn.addEventListener('click', refreshData);
+    if (state.isAdmin) {
+      refreshBtn.addEventListener('click', adminRefresh);
+    } else {
+      // Hide refresh button for non-admins
+      refreshBtn.style.display = 'none';
+    }
   }
 
-  // Retry button (in error state)
+  // Retry button (in error state) - admin only
   const retryBtn = document.getElementById('retry-btn');
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
       state.error = null;
-      loadLiveData();
+      if (state.isAdmin) {
+        adminRefresh();
+      } else {
+        init(); // Try to load from cache again
+      }
     });
   }
 
@@ -322,27 +344,74 @@ function attachEventListeners() {
 // INITIALIZATION
 // ============================================
 
-function init() {
-  console.log('🏆 BetPredict - AI-Powered Edge Finder Initializing...');
-  console.log('🔧 Enhanced UX with Confidence Sections');
+async function init() {
+  console.log('🏆 BetPredict - AI-Powered Edge Finder');
+  console.log(`🔐 Admin mode: ${state.isAdmin ? 'YES' : 'NO'}`);
 
-  // Start with live data by default
-  loadLiveData();
+  // Step 1: Try to load cached predictions from Gist
+  if (isGistConfigured()) {
+    state.isLoading = true;
+    state.progress = { current: 0, total: 0, message: 'Loading cached predictions...' };
+    render();
 
-  console.log('🚀 Dashboard Ready!');
+    const cached = await readFromGist();
+
+    if (cached && cached.predictions && cached.predictions.length > 0) {
+      console.log(`📦 Loaded ${cached.predictions.length} cached predictions`);
+      state.allMatches = cached.predictions;
+      state.lastUpdated = cached.lastUpdated ? new Date(cached.lastUpdated) : null;
+      state.totalAnalyzed = cached.predictions.length;
+      state.mode = 'cached';
+      state.isLoading = false;
+      updateState();
+      return;
+    } else {
+      console.log('📭 No cached predictions found');
+    }
+  }
+
+  // Step 2: If admin and no cache, load live data
+  if (state.isAdmin) {
+    loadLiveData();
+  } else {
+    // Non-admin with no cache: show empty state
+    state.isLoading = false;
+    state.error = 'No predictions available yet. An admin needs to refresh the data.';
+    render();
+  }
+}
+
+/**
+ * Admin-only: Refresh and save to Gist
+ */
+async function adminRefresh() {
+  if (!state.isAdmin) {
+    console.warn('⛔ Refresh blocked: Admin access required');
+    return;
+  }
+
+  await loadLiveData();
+
+  // Save to Gist after successful load
+  if (state.allMatches.length > 0 && isGistConfigured()) {
+    const saved = await writeToGist(state.allMatches);
+    if (saved) {
+      console.log('✅ Predictions saved to Gist for all users');
+    }
+  }
 }
 
 // Start the application
 document.addEventListener('DOMContentLoaded', init);
 
 // Export for console debugging
-window.sharpshooter = {
+window.betpredict = {
   state,
   loadMockData,
   loadLiveData,
+  adminRefresh,
   refreshData,
   toggleMode,
-  setSectionLimit,
   setSectionLimit,
   toggleLowSection,
   toggleTheme
