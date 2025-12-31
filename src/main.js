@@ -177,20 +177,11 @@ async function loadLiveData() {
   state.mode = 'live';
   state.isLoading = true;
   state.error = null;
-  state.progress = { current: 0, total: 0, message: 'Connecting to API-Football...' };
+  state.progress = { current: 0, total: 0, message: 'Connecting to data sources...' };
   render();
 
   try {
-    console.log('🔗 Testing API-Football connection...');
-    state.progress.message = 'Testing API connection...';
-    render();
-
-    const apiOk = await testConnection();
-    if (!apiOk) {
-      throw new Error('Failed to connect to API-Football. Check your API key.');
-    }
-
-    console.log('✅ API-Football connected!');
+    console.log('📡 Fetching matches from available sources...');
     state.progress.message = 'Fetching upcoming fixtures...';
     render();
 
@@ -203,13 +194,14 @@ async function loadLiveData() {
     );
 
     if (matches.length === 0) {
-      throw new Error('No matches found. Try again later.');
+      throw new Error('No matches found from any source. Try again later.');
     }
 
     state.allMatches = matches;
     state.totalAnalyzed = matches.length;
     state.lastUpdated = new Date();
     state.isLoading = false;
+    state.mode = 'live';
 
     updateState();
 
