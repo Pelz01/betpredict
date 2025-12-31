@@ -355,7 +355,7 @@ export function renderErrorState(errorMessage) {
       </h1>
       
       <p style="color:var(--text-secondary); max-width:400px; margin-bottom:2rem; line-height:1.6;">
-        Our AI is preparing the next batch of edges for you. Check back at the next scheduled refresh.
+        Our AI is preparing the next set of predictions for you. Check back at the next scheduled refresh.
       </p>
       
       <div style="background:var(--glass-bg); backdrop-filter:blur(10px); border:1px solid var(--glass-border); border-radius:16px; padding:2rem 3rem; margin-bottom:2rem;">
