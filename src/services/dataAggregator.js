@@ -1,19 +1,28 @@
 /**
  * Data Aggregator Service
- * Combines API-Football data with ORACLE predictions
+ * Combines data from API-Football AND Sportmonks with ORACLE predictions
  */
 
 import {
-    getLeagueFixtures,
-    getFixtureOdds,
-    getTeamLastFixtures,
-    getHeadToHead,
+    getLeagueFixtures as getApiFootballFixtures,
+    getFixtureOdds as getApiFootballOdds,
+    getTeamLastFixtures as getApiFootballTeamForm,
+    getHeadToHead as getApiFootballH2H,
     getPredictions,
-    extractBestOdds,
-    calculateTeamForm,
+    extractBestOdds as extractApiFootballOdds,
+    calculateTeamForm as calculateApiFootballForm,
     POPULAR_LEAGUES,
     testConnection as testApiFootball
 } from './apiFootballService.js';
+
+import {
+    getUpcomingFixtures as getSportmonksFixtures,
+    extractBestOdds as extractSportmonksOdds,
+    calculateTeamForm as calculateSportmonksForm,
+    getTeamForm as getSportmonksTeamForm,
+    getHeadToHead as getSportmonksH2H,
+    testConnection as testSportmonks
+} from './sportmonksService.js';
 
 import { analyzeMatch, analyzeMatches } from './oracleService.js';
 import { calculateEV, calculateKelly, getConfidenceTier } from '../data.js';
@@ -37,8 +46,8 @@ async function aggregateFixtureData(fixture) {
     // Get odds for this fixture
     let odds = null;
     try {
-        const oddsData = await getFixtureOdds(fixtureId);
-        odds = extractBestOdds(oddsData);
+        const oddsData = await getApiFootballOdds(fixtureId);
+        odds = extractApiFootballOdds(oddsData);
     } catch (error) {
         console.warn('No odds for fixture:', fixtureId);
     }
@@ -75,17 +84,17 @@ async function aggregateFixtureData(fixture) {
 
     try {
         [homeFormData, awayFormData, h2hData] = await Promise.all([
-            getTeamLastFixtures(homeTeam.id, 10).catch(() => []),
-            getTeamLastFixtures(awayTeam.id, 10).catch(() => []),
-            getHeadToHead(homeTeam.id, awayTeam.id, 5).catch(() => [])
+            getApiFootballTeamForm(homeTeam.id, 10).catch(() => []),
+            getApiFootballTeamForm(awayTeam.id, 10).catch(() => []),
+            getApiFootballH2H(homeTeam.id, awayTeam.id, 5).catch(() => [])
         ]);
     } catch (error) {
         console.warn('Error fetching team data:', error);
     }
 
     // Calculate form
-    const homeForm = calculateTeamForm(homeFormData, homeTeam.id);
-    const awayForm = calculateTeamForm(awayFormData, awayTeam.id);
+    const homeForm = calculateApiFootballForm(homeFormData, homeTeam.id);
+    const awayForm = calculateApiFootballForm(awayFormData, awayTeam.id);
 
     // Calculate H2H
     let h2h = null;
@@ -221,9 +230,9 @@ export async function fetchLiveMatches(options = {}, onProgress) {
         useAI = true
     } = options;
 
-    console.log('📡 Fetching live matches from API-Football...');
+    console.log('📡 Fetching live matches from BOTH API-Football and Sportmonks...');
 
-    // Step 1: Get upcoming fixtures from popular leagues
+    // Step 1: Fetch from BOTH sources in parallel
     const leagueIds = [
         POPULAR_LEAGUES.PREMIER_LEAGUE,
         POPULAR_LEAGUES.LA_LIGA,
@@ -232,22 +241,77 @@ export async function fetchLiveMatches(options = {}, onProgress) {
         POPULAR_LEAGUES.CHAMPIONS_LEAGUE
     ];
 
-    let fixtures = [];
-    try {
-        fixtures = await getLeagueFixtures(leagueIds, '2024');
-    } catch (error) {
-        console.error('Failed to fetch fixtures:', error);
-        throw new Error('Failed to fetch fixtures from API-Football: ' + error.message);
+    let apiFootballFixtures = [];
+    let sportmonksFixtures = [];
+
+    const [afResult, smResult] = await Promise.allSettled([
+        getApiFootballFixtures(leagueIds, '2024'),
+        getSportmonksFixtures(3) // next 3 days
+    ]);
+
+    if (afResult.status === 'fulfilled') {
+        apiFootballFixtures = afResult.value || [];
+        console.log(`✅ API-Football: ${apiFootballFixtures.length} fixtures`);
+    } else {
+        console.warn('⚠️ API-Football failed:', afResult.reason?.message);
     }
 
-    console.log(`📊 Found ${fixtures.length} fixtures`);
+    if (smResult.status === 'fulfilled') {
+        sportmonksFixtures = smResult.value || [];
+        console.log(`✅ Sportmonks: ${sportmonksFixtures.length} fixtures`);
+    } else {
+        console.warn('⚠️ Sportmonks failed:', smResult.reason?.message);
+    }
 
-    if (fixtures.length === 0) {
-        throw new Error('No upcoming fixtures found. Try again later.');
+    // Merge and de-duplicate by team names (crude but effective)
+    const allFixtures = [...apiFootballFixtures];
+    const existingMatchups = new Set(
+        apiFootballFixtures.map(f =>
+            `${f.teams?.home?.name?.toLowerCase()}-${f.teams?.away?.name?.toLowerCase()}`
+        )
+    );
+
+    // Add Sportmonks fixtures that aren't already in API-Football results
+    sportmonksFixtures.forEach(smFixture => {
+        const participants = smFixture.participants || [];
+        const home = participants.find(p => p.meta?.location === 'home');
+        const away = participants.find(p => p.meta?.location === 'away');
+
+        if (home && away) {
+            const matchKey = `${home.name?.toLowerCase()}-${away.name?.toLowerCase()}`;
+            if (!existingMatchups.has(matchKey)) {
+                // Convert Sportmonks format to API-Football format for consistency
+                allFixtures.push({
+                    fixture: {
+                        id: smFixture.id,
+                        date: smFixture.starting_at,
+                        status: { short: 'NS' } // Assume upcoming
+                    },
+                    teams: {
+                        home: { id: home.id, name: home.name, logo: home.image_path },
+                        away: { id: away.id, name: away.name, logo: away.image_path }
+                    },
+                    league: {
+                        id: smFixture.league_id,
+                        name: smFixture.league?.name || 'Unknown League',
+                        logo: smFixture.league?.image_path
+                    },
+                    _source: 'sportmonks',
+                    _rawSportmonks: smFixture // Keep original for odds extraction
+                });
+                existingMatchups.add(matchKey);
+            }
+        }
+    });
+
+    console.log(`📊 Combined: ${allFixtures.length} unique fixtures from both sources`);
+
+    if (allFixtures.length === 0) {
+        throw new Error('No upcoming fixtures found from either API. Try again later.');
     }
 
     // Filter to only "Not Started" fixtures
-    const upcomingFixtures = fixtures
+    const upcomingFixtures = allFixtures
         .filter(f => f.fixture?.status?.short === 'NS')
         .slice(0, maxMatches);
 
@@ -335,11 +399,21 @@ export async function fetchLiveMatches(options = {}, onProgress) {
 }
 
 /**
- * Test API connection
+ * Test API connections (both API-Football and Sportmonks)
  */
 export async function testConnection() {
-    const result = await testApiFootball();
-    return result.success;
+    const [afResult, smResult] = await Promise.allSettled([
+        testApiFootball(),
+        testSportmonks()
+    ]);
+
+    const afOk = afResult.status === 'fulfilled' && afResult.value?.success;
+    const smOk = smResult.status === 'fulfilled' && smResult.value;
+
+    console.log(`API Status: API-Football=${afOk ? '✅' : '❌'}, Sportmonks=${smOk ? '✅' : '❌'}`);
+
+    // Return true if at least one API is working
+    return afOk || smOk;
 }
 
 /**
