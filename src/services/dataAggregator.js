@@ -29,7 +29,7 @@ import { calculateEV, calculateKelly, getConfidenceTier } from '../data.js';
 
 /**
  * Aggregate all data for a single fixture
- * @param {object} fixture - API-Football fixture object
+ * Handles both API-Football and Sportmonks fixtures
  */
 async function aggregateFixtureData(fixture) {
     const homeTeam = fixture.teams?.home;
@@ -42,80 +42,105 @@ async function aggregateFixtureData(fixture) {
 
     const fixtureId = fixture.fixture?.id;
     const leagueId = fixture.league?.id;
+    const isFromSportmonks = fixture._source === 'sportmonks';
 
-    // Get odds for this fixture
     let odds = null;
-    try {
-        const oddsData = await getApiFootballOdds(fixtureId);
-        odds = extractApiFootballOdds(oddsData);
-    } catch (error) {
-        console.warn('No odds for fixture:', fixtureId);
-    }
-
-    // If no odds, generate reasonable defaults based on the fixture
-    if (!odds) {
-        // Use API-Football predictions as fallback
-        try {
-            const predictions = await getPredictions(fixtureId);
-            if (predictions?.predictions?.percent) {
-                const homeProb = parseInt(predictions.predictions.percent.home) / 100;
-                const drawProb = parseInt(predictions.predictions.percent.draw) / 100;
-                const awayProb = parseInt(predictions.predictions.percent.away) / 100;
-
-                // Convert probabilities to implied odds (with 5% margin)
-                odds = {
-                    home: parseFloat((1 / (homeProb * 0.95)).toFixed(2)),
-                    draw: parseFloat((1 / (drawProb * 0.95)).toFixed(2)),
-                    away: parseFloat((1 / (awayProb * 0.95)).toFixed(2))
-                };
-            }
-        } catch (e) {
-            console.warn('No predictions for fixture:', fixtureId);
-        }
-    }
-
-    if (!odds) {
-        // Last resort: use default balanced odds
-        odds = { home: 2.50, draw: 3.30, away: 2.80 };
-    }
-
-    // Get team form (parallel requests)
-    let homeFormData = [], awayFormData = [], h2hData = [];
-
-    try {
-        [homeFormData, awayFormData, h2hData] = await Promise.all([
-            getApiFootballTeamForm(homeTeam.id, 10).catch(() => []),
-            getApiFootballTeamForm(awayTeam.id, 10).catch(() => []),
-            getApiFootballH2H(homeTeam.id, awayTeam.id, 5).catch(() => [])
-        ]);
-    } catch (error) {
-        console.warn('Error fetching team data:', error);
-    }
-
-    // Calculate form
-    const homeForm = calculateApiFootballForm(homeFormData, homeTeam.id);
-    const awayForm = calculateApiFootballForm(awayFormData, awayTeam.id);
-
-    // Calculate H2H
+    let homeForm = null;
+    let awayForm = null;
     let h2h = null;
-    if (h2hData && h2hData.length > 0) {
-        let homeWins = 0, draws = 0, awayWins = 0;
-        h2hData.forEach(match => {
-            const hGoals = match.goals?.home ?? 0;
-            const aGoals = match.goals?.away ?? 0;
 
-            // Check if home team in this fixture was home in the H2H match
-            const wasHome = match.teams?.home?.id === homeTeam.id;
+    if (isFromSportmonks) {
+        // ========================================
+        // SPORTMONKS FIXTURE - use embedded data
+        // ========================================
+        console.log(`📊 Processing Sportmonks fixture: ${homeTeam.name} vs ${awayTeam.name}`);
 
-            if (hGoals > aGoals) {
-                wasHome ? homeWins++ : awayWins++;
-            } else if (hGoals < aGoals) {
-                wasHome ? awayWins++ : homeWins++;
-            } else {
-                draws++;
+        // Extract odds from Sportmonks raw data
+        if (fixture._rawSportmonks) {
+            odds = extractSportmonksOdds(fixture._rawSportmonks);
+        }
+
+        // Use default odds if not available
+        if (!odds) {
+            odds = { home: 2.50, draw: 3.30, away: 2.80 };
+        }
+
+        // Form data not available without extra API calls
+        homeForm = { form: '?????', wins: 0, draws: 0, losses: 0 };
+        awayForm = { form: '?????', wins: 0, draws: 0, losses: 0 };
+
+    } else {
+        // ========================================
+        // API-FOOTBALL FIXTURE - call their endpoints
+        // ========================================
+        console.log(`📊 Processing API-Football fixture: ${homeTeam.name} vs ${awayTeam.name}`);
+
+        // Get odds for this fixture
+        try {
+            const oddsData = await getApiFootballOdds(fixtureId);
+            odds = extractApiFootballOdds(oddsData);
+        } catch (error) {
+            console.warn('No odds for fixture:', fixtureId);
+        }
+
+        // If no odds, try predictions as fallback
+        if (!odds) {
+            try {
+                const predictions = await getPredictions(fixtureId);
+                if (predictions?.predictions?.percent) {
+                    const homeProb = parseInt(predictions.predictions.percent.home) / 100;
+                    const drawProb = parseInt(predictions.predictions.percent.draw) / 100;
+                    const awayProb = parseInt(predictions.predictions.percent.away) / 100;
+
+                    odds = {
+                        home: parseFloat((1 / (homeProb * 0.95)).toFixed(2)),
+                        draw: parseFloat((1 / (drawProb * 0.95)).toFixed(2)),
+                        away: parseFloat((1 / (awayProb * 0.95)).toFixed(2))
+                    };
+                }
+            } catch (e) {
+                console.warn('No predictions for fixture:', fixtureId);
             }
-        });
-        h2h = { homeWins, draws, awayWins, total: h2hData.length };
+        }
+
+        if (!odds) {
+            odds = { home: 2.50, draw: 3.30, away: 2.80 };
+        }
+
+        // Get team form (parallel requests)
+        let homeFormData = [], awayFormData = [], h2hData = [];
+
+        try {
+            [homeFormData, awayFormData, h2hData] = await Promise.all([
+                getApiFootballTeamForm(homeTeam.id, 10).catch(() => []),
+                getApiFootballTeamForm(awayTeam.id, 10).catch(() => []),
+                getApiFootballH2H(homeTeam.id, awayTeam.id, 5).catch(() => [])
+            ]);
+        } catch (error) {
+            console.warn('Error fetching team data:', error);
+        }
+
+        homeForm = calculateApiFootballForm(homeFormData, homeTeam.id);
+        awayForm = calculateApiFootballForm(awayFormData, awayTeam.id);
+
+        // Calculate H2H
+        if (h2hData && h2hData.length > 0) {
+            let homeWins = 0, draws = 0, awayWins = 0;
+            h2hData.forEach(match => {
+                const hGoals = match.goals?.home ?? 0;
+                const aGoals = match.goals?.away ?? 0;
+                const wasHome = match.teams?.home?.id === homeTeam.id;
+
+                if (hGoals > aGoals) {
+                    wasHome ? homeWins++ : awayWins++;
+                } else if (hGoals < aGoals) {
+                    wasHome ? awayWins++ : homeWins++;
+                } else {
+                    draws++;
+                }
+            });
+            h2h = { homeWins, draws, awayWins, total: h2hData.length };
+        }
     }
 
     return {
@@ -134,9 +159,10 @@ async function aggregateFixtureData(fixture) {
         kickoff: fixture.fixture?.date,
         status: fixture.fixture?.status?.short,
         odds,
-        homeForm,
-        awayForm,
-        h2h
+        homeForm: homeForm || { form: '?????', wins: 0, draws: 0, losses: 0 },
+        awayForm: awayForm || { form: '?????', wins: 0, draws: 0, losses: 0 },
+        h2h,
+        _source: isFromSportmonks ? 'sportmonks' : 'api-football'
     };
 }
 
