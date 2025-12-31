@@ -383,3 +383,57 @@ export function renderErrorState(errorMessage) {
     </div>
   `;
 }
+
+export function renderCountdownBanner() {
+  // Calculate time until next refresh (9 AM or 3 PM UTC+1)
+  const now = new Date();
+  const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000)); // Adjust for UTC+1
+
+  const hours = utcPlus1.getUTCHours();
+  let nextRefresh;
+
+  if (hours < 9) {
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(9, 0, 0, 0);
+  } else if (hours < 15) {
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(15, 0, 0, 0);
+  } else {
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setDate(nextRefresh.getDate() + 1);
+    nextRefresh.setUTCHours(9, 0, 0, 0);
+  }
+
+  let diff = nextRefresh - utcPlus1;
+  if (diff < 0) diff = 0;
+
+  const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
+  const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+  return `
+    <div class="countdown-banner" style="
+      background: var(--bg-surface); 
+      border-bottom: 1px solid var(--border-color); 
+      padding: 0.75rem 1rem; 
+      display: flex; 
+      justify-content: center; 
+      align-items: center; 
+      gap: 1rem;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      width: 100%;
+      position: relative;
+      z-index: 10;
+    ">
+      <span>⚡ Next prediction drop in:</span>
+      <span id="countdown-banner-timer" style="
+        font-family: var(--font-display); 
+        font-weight: 700; 
+        color: var(--accent-primary);
+        font-variant-numeric: tabular-nums;
+      ">
+        ${hoursLeft}h ${minutesLeft}m
+      </span>
+    </div>
+  `;
+}

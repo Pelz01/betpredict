@@ -20,7 +20,8 @@ import {
   renderConfidenceSection,
   renderLowSectionCollapsed,
   renderLoadingState,
-  renderErrorState
+  renderErrorState,
+  renderCountdownBanner
 } from './components.js';
 
 // ============================================
@@ -102,6 +103,7 @@ function render() {
 
   app.innerHTML = `
     ${renderHeader(state)}
+    ${renderCountdownBanner()}
     
     ${renderConfidenceSection({
     type: 'high',
@@ -308,9 +310,11 @@ function attachEventListeners() {
     });
   }
 
-  // Countdown Timer (if present in error/waiting state)
+  // Countdown Timer (if present in error/waiting state OR banner)
   const countdownEl = document.getElementById('countdown-timer');
-  if (countdownEl) {
+  const bannerCountdownEl = document.getElementById('countdown-banner-timer');
+
+  if (countdownEl || bannerCountdownEl) {
     // Clear any existing interval
     if (window.countdownInterval) clearInterval(window.countdownInterval);
 
@@ -340,7 +344,13 @@ function attachEventListeners() {
       const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
       const secondsLeft = Math.floor((diff % (1000 * 60)) / 1000);
 
-      countdownEl.textContent = `${hoursLeft}h ${minutesLeft}m ${secondsLeft}s`;
+      if (countdownEl) {
+        countdownEl.textContent = `${hoursLeft}h ${minutesLeft}m ${secondsLeft}s`;
+      }
+
+      if (bannerCountdownEl) {
+        bannerCountdownEl.textContent = `${hoursLeft}h ${minutesLeft}m`;
+      }
     }, 1000);
   }
 
