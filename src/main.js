@@ -21,7 +21,8 @@ import {
   renderLowSectionCollapsed,
   renderLoadingState,
   renderErrorState,
-  renderCountdownBanner
+  renderCountdownBanner,
+  renderFooter
 } from './components.js';
 
 // ============================================
@@ -78,6 +79,7 @@ function render() {
     app.innerHTML = `
       ${renderHeader(state)}
       ${renderLoadingState(state.progress)}
+      ${renderFooter()}
     `;
     return;
   }
@@ -86,6 +88,7 @@ function render() {
     app.innerHTML = `
       ${renderHeader(state)}
       ${renderErrorState(state.error)}
+      ${renderFooter()}
     `;
     attachEventListeners();
     return;
@@ -142,9 +145,7 @@ function render() {
       : renderLowSectionCollapsed(state.groupedMatches.low.length)
     }
 
-    <footer style="text-align: center; padding: 2rem; color: var(--text-tertiary); font-size: 0.85rem; font-family: var(--font-body);">
-      Built with love <span style="color: #22c55e;">💚</span> by Pelz
-    </footer>
+    ${renderFooter()}
   `;
 
   attachEventListeners();
