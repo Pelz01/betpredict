@@ -95,12 +95,6 @@ export function renderHeader(state) {
           ${isDark ? '☀️' : '🌙'}
         </button>
 
-        <!-- Mode Indicator -->
-        <span class="mode-toggle-btn ${modeClass}" style="cursor: default;">
-          <span class="indicator"></span>
-          <span>${modeLabel}</span>
-        </span>
-
         <!-- Refresh Button (shown for all, hidden via JS for non-admin) -->
         <button class="btn-icon" id="refresh-btn" title="Admin: Refresh predictions">
           🔄
