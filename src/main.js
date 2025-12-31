@@ -304,6 +304,42 @@ function attachEventListeners() {
     });
   }
 
+  // Countdown Timer (if present in error/waiting state)
+  const countdownEl = document.getElementById('countdown-timer');
+  if (countdownEl) {
+    // Clear any existing interval
+    if (window.countdownInterval) clearInterval(window.countdownInterval);
+
+    // Start new interval
+    window.countdownInterval = setInterval(() => {
+      const now = new Date();
+      const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000));
+      const hours = utcPlus1.getUTCHours();
+      let nextRefresh;
+
+      if (hours < 9) {
+        nextRefresh = new Date(utcPlus1);
+        nextRefresh.setUTCHours(9, 0, 0, 0);
+      } else if (hours < 15) {
+        nextRefresh = new Date(utcPlus1);
+        nextRefresh.setUTCHours(15, 0, 0, 0);
+      } else {
+        nextRefresh = new Date(utcPlus1);
+        nextRefresh.setDate(nextRefresh.getDate() + 1);
+        nextRefresh.setUTCHours(9, 0, 0, 0);
+      }
+
+      let diff = nextRefresh - utcPlus1;
+      if (diff < 0) diff = 0;
+
+      const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
+      const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const secondsLeft = Math.floor((diff % (1000 * 60)) / 1000);
+
+      countdownEl.textContent = `${hoursLeft}h ${minutesLeft}m ${secondsLeft}s`;
+    }, 1000);
+  }
+
   // Use mock data button (in error state)
   const useMockBtn = document.getElementById('use-mock-btn');
   if (useMockBtn) {

@@ -311,14 +311,71 @@ export function renderLoadingState(progress = { current: 0, total: 0, message: '
 }
 
 export function renderErrorState(errorMessage) {
+  // Calculate time until next refresh (9 AM or 3 PM UTC+1)
+  const now = new Date();
+  const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000)); // Adjust for UTC+1
+
+  const hours = utcPlus1.getUTCHours();
+  let nextRefresh;
+
+  if (hours < 9) {
+    // Before 9 AM - next is 9 AM today
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(9, 0, 0, 0);
+  } else if (hours < 15) {
+    // Before 3 PM - next is 3 PM today
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(15, 0, 0, 0);
+  } else {
+    // After 3 PM - next is 9 AM tomorrow
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setDate(nextRefresh.getDate() + 1);
+    nextRefresh.setUTCHours(9, 0, 0, 0);
+  }
+
+  // Calculate countdown
+  let diff = nextRefresh - utcPlus1;
+  if (diff < 0) diff = 0; // Safety
+
+  const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
+  const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+  const nextTimeLabel = nextRefresh.getUTCHours() === 9 ? '9:00 AM' : '3:00 PM';
+
   return `
-    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; text-align:center;">
-        <div style="font-size:4rem; margin-bottom:1rem">❌</div>
-        <h2>Connection Error</h2>
-        <p style="color:var(--text-secondary); max-width:400px; margin-bottom:2rem">${errorMessage}</p>
-        <button class="mode-toggle-btn" id="retry-btn">
-            Try Again
+    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:70vh; text-align:center; padding: 2rem;">
+      <div style="font-size:5rem; margin-bottom:1.5rem; filter: grayscale(0.3);">🏆</div>
+      
+      <h1 style="font-family:var(--font-display); font-size:2rem; margin-bottom:0.5rem; background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+        Predictions Coming Soon
+      </h1>
+      
+      <p style="color:var(--text-secondary); max-width:400px; margin-bottom:2rem; line-height:1.6;">
+        Our AI is preparing the next batch of edges for you. Check back at the next scheduled refresh.
+      </p>
+      
+      <div style="background:var(--glass-bg); backdrop-filter:blur(10px); border:1px solid var(--glass-border); border-radius:16px; padding:2rem 3rem; margin-bottom:2rem;">
+        <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-tertiary); margin-bottom:0.5rem;">
+          Next Refresh In
+        </div>
+        <div id="countdown-timer" style="font-family:var(--font-display); font-size:2.5rem; font-weight:700; color:var(--accent-primary);">
+          ${hoursLeft}h ${minutesLeft}m
+        </div>
+        <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.5rem;">
+          📅 ${nextTimeLabel} (UTC+1)
+        </div>
+      </div>
+      
+      <div style="display:flex; gap:1rem; flex-wrap:wrap; justify-content:center;">
+        <button class="mode-toggle-btn mode-live" id="retry-btn" style="cursor:pointer;">
+          <span class="indicator"></span>
+          <span>🔄 Check Again</span>
         </button>
+      </div>
+      
+      <p style="margin-top:3rem; font-size:0.75rem; color:var(--text-tertiary); max-width:300px;">
+        💡 Predictions refresh automatically at <strong>9:00 AM</strong> and <strong>3:00 PM</strong> daily
+      </p>
     </div>
   `;
 }
