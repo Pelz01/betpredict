@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run refresh script
+        run: node scripts/refresh-predictions.js
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
@@ -31,4 +31,3 @@ jobs:
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
           GIST_ID: ${{ secrets.GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
-        run: node scripts/refresh-predictions.js
