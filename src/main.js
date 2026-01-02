@@ -1,19 +1,12 @@
 /**
- * BetPredict - AI-Powered Edge Finder
+ * Oracle Pro - Autonomous Agent Dashboard
  * Main Application Entry Point
  */
 
 import './styles.css';
-import {
-  generateMockData,
-  filterAndSortMatches,
-  getMatchStats,
-  groupByConfidence,
-  getSectionStats
-} from './data.js';
 import { fetchLiveMatches, testConnection } from './services/dataAggregator.js';
 import { clearCache as clearApiCache } from './services/apiFootballService.js';
-import { clearPredictionCache } from './services/oracleService.js';
+import { clearPredictionCache, analyzeMatch } from './services/oracleService.js';
 import { readFromGist, writeToGist, isGistConfigured } from './services/gistService.js';
 import {
   renderHeader,
@@ -21,55 +14,92 @@ import {
   renderLowSectionCollapsed,
   renderLoadingState,
   renderErrorState,
-  renderCountdownBanner,
   renderFooter
 } from './components.js';
 
 // ============================================
-// ADMIN PASSKEY CHECK
+// ADMIN CONFIG
 // ============================================
 
-const ADMIN_PASSKEY = import.meta.env.VITE_ADMIN_PASSKEY || 'betpredict2024';
+const ADMIN_PASSKEY = import.meta.env.VITE_ADMIN_PASSKEY || 'oracle2026';
 const urlParams = new URLSearchParams(window.location.search);
 const isAdmin = urlParams.get('admin') === ADMIN_PASSKEY;
 
-if (isAdmin) {
-  console.log('🔐 Admin mode activated');
-}
+if (isAdmin) console.log('🔐 Admin Access Granted');
 
 // ============================================
-// APPLICATION STATE
+// STATE MANAGEMENT
 // ============================================
 
 const state = {
-  // Match data
-  allMatches: [],
-  groupedMatches: { high: [], medium: [], low: [] },
+  // New Structure: Arrays of Bets (not Matches)
+  groupedBets: { high: [], medium: [], low: [] },
+  stats: {},
 
-  // Section limits (default values per UX spec)
-  sectionLimits: {
-    high: 10,
-    medium: 15,
-    low: 5
-  },
-
-  // UI state
+  // UI Config
+  sectionLimits: { high: 10, medium: 15, low: 5 },
   lowSectionExpanded: false,
+
+  // Status
   isLoading: false,
   error: null,
-  mode: 'cached', // 'cached', 'live', 'mock'
+  mode: 'cached', // 'cached' or 'live' (processing)
   isAdmin: isAdmin,
-
-  // Metadata
   lastUpdated: null,
-  totalAnalyzed: 0,
 
-  // Progress tracking
+  // Progress for Live Analysis
   progress: { current: 0, total: 0, message: '' }
 };
 
 // ============================================
-// RENDER FUNCTIONS
+// CORE LOGIC - DATA PROCESSING
+// ============================================
+
+/**
+ * Convert raw AI Analysis into Ranked Bets Logic 
+ * (Replicates scripts/refresh-predictions.js logic for Browser)
+ */
+function processAnalysisResults(rawPredictions) {
+  const allBets = [];
+
+  rawPredictions.forEach(item => {
+    const bets = item.analysis.recommended_bets || [];
+
+    bets.forEach(bet => {
+      // Filter: EV > 5% and Confidence > 60 (Medium)
+      if (bet.ev >= 5 && (bet.confidence >= 60 || bet.tier !== 'LOW')) {
+        allBets.push({
+          match_id: item.meta.match_id,
+          match_display: `${item.meta.home_team} vs ${item.meta.away_team}`,
+          league: item.meta.league,
+          kickoff: item.meta.kickoff,
+          market: bet.market,
+          pick: bet.pick,
+          odds: bet.odds,
+          ev: bet.ev,
+          confidence: bet.confidence,
+          tier: bet.tier,
+          stake: bet.stake,
+          reason: bet.simple_reason,
+          risk_factors: item.analysis.news_impact?.has_breaking_news ? ['Breaking News Impact'] : []
+        });
+      }
+    });
+  });
+
+  // Sort by EV
+  allBets.sort((a, b) => b.ev - a.ev);
+
+  return {
+    high: allBets.filter(b => b.confidence >= 80 || b.tier === 'HIGH' || b.tier === 'ELITE'),
+    medium: allBets.filter(b => (b.confidence >= 60 && b.confidence < 80) || b.tier === 'STRONG' || b.tier === 'MEDIUM'),
+    low: allBets.filter(b => b.confidence < 60 || b.tier === 'LOW'),
+    all: allBets
+  };
+}
+
+// ============================================
+// RENDER LOOP
 // ============================================
 
 function render() {
@@ -94,40 +124,32 @@ function render() {
     return;
   }
 
-  // Calculate stats for each section
-  const highStats = getSectionStats(state.groupedMatches.high);
-  const mediumStats = getSectionStats(state.groupedMatches.medium);
-  const lowStats = getSectionStats(state.groupedMatches.low);
-
-  // Get matches limited by current section limits
-  const highMatches = state.groupedMatches.high.slice(0, state.sectionLimits.high);
-  const mediumMatches = state.groupedMatches.medium.slice(0, state.sectionLimits.medium);
-  const lowMatches = state.groupedMatches.low.slice(0, state.sectionLimits.low);
+  // Slice for Display Limits
+  const highDisplay = state.groupedBets?.high?.slice(0, state.sectionLimits.high) || [];
+  const mediumDisplay = state.groupedBets?.medium?.slice(0, state.sectionLimits.medium) || [];
+  const lowDisplay = state.groupedBets?.low?.slice(0, state.sectionLimits.low) || [];
 
   app.innerHTML = `
     ${renderHeader(state)}
-    ${renderCountdownBanner()}
     
     ${renderConfidenceSection({
     type: 'high',
     icon: '🔥',
     title: 'HIGH CONFIDENCE',
-    subtitle: '80%+ Confidence',
-    matches: highMatches,
-    totalAvailable: state.groupedMatches.high.length,
-    currentLimit: state.sectionLimits.high,
-    stats: highStats
+    subtitle: '80%+ Tier',
+    matches: highDisplay,
+    totalAvailable: state.groupedBets?.high?.length || 0,
+    currentLimit: state.sectionLimits.high
   })}
     
     ${renderConfidenceSection({
     type: 'medium',
     icon: '💎',
     title: 'MEDIUM CONFIDENCE',
-    subtitle: '60-79% Confidence',
-    matches: mediumMatches,
-    totalAvailable: state.groupedMatches.medium.length,
-    currentLimit: state.sectionLimits.medium,
-    stats: mediumStats
+    subtitle: '60-79% Tier',
+    matches: mediumDisplay,
+    totalAvailable: state.groupedBets?.medium?.length || 0,
+    currentLimit: state.sectionLimits.medium
   })}
     
     ${state.lowSectionExpanded
@@ -135,14 +157,13 @@ function render() {
         type: 'low',
         icon: '⚠️',
         title: 'LOW CONFIDENCE',
-        subtitle: '50-59% Confidence',
-        matches: lowMatches,
-        totalAvailable: state.groupedMatches.low.length,
+        subtitle: 'High Risk / Variance',
+        matches: lowDisplay,
+        totalAvailable: state.groupedBets?.low?.length || 0,
         currentLimit: state.sectionLimits.low,
-        stats: lowStats,
         isLow: true
       })
-      : renderLowSectionCollapsed(state.groupedMatches.low.length)
+      : renderLowSectionCollapsed(state.groupedBets?.low?.length || 0)
     }
 
     ${renderFooter()}
@@ -151,311 +172,147 @@ function render() {
   attachEventListeners();
 }
 
-function updateState() {
-  // Group matches by confidence
-  const filtered = filterAndSortMatches(state.allMatches, { minEV: 3 });
-  state.groupedMatches = groupByConfidence(filtered);
-  render();
-}
-
 // ============================================
-// DATA FETCHING
+// DATA LOADING
 // ============================================
 
-async function loadMockData() {
-  state.mode = 'mock';
-  state.isLoading = true;
-  state.error = null;
-  render();
+async function init() {
+  console.log('🏆 Oracle Pro Initializing...');
 
-  await new Promise(resolve => setTimeout(resolve, 500));
+  // 1. Try Gist Load (Standard for Users)
+  if (isGistConfigured()) {
+    state.isLoading = true;
+    state.progress.message = 'Syncing with Oracle Brain...';
+    render();
 
-  state.allMatches = generateMockData();
-  state.totalAnalyzed = state.allMatches.length;
-  state.lastUpdated = new Date();
+    try {
+      const data = await readFromGist();
+      if (data && data.predictions) {
+        state.groupedBets = data.predictions;
+        state.stats = data.stats;
+        state.lastUpdated = new Date(data.lastUpdated);
+        state.mode = 'cached';
+        console.log('✅ Loaded data from Gist');
+      } else {
+        throw new Error('No valid predictions found.');
+      }
+    } catch (e) {
+      console.warn('Gist load failed:', e);
+      if (!isAdmin) state.error = "Waiting for Oracle Pro to publish new predictions.";
+    }
+  }
+
   state.isLoading = false;
+  render();
 
-  updateState();
-
-  console.log(`📊 Loaded ${state.allMatches.length} mock matches`);
+  // If Admin and empty, auto-trigger live load? No, wait for button.
 }
 
-async function loadLiveData() {
+async function runLiveAnalysis() {
+  if (!state.isAdmin) return;
+
   state.mode = 'live';
   state.isLoading = true;
   state.error = null;
-  state.progress = { current: 0, total: 0, message: 'Connecting to data sources...' };
+  state.progress = { current: 0, total: 10, message: 'Initialize...' };
   render();
 
   try {
-    console.log('📡 Fetching matches from available sources...');
-    state.progress.message = 'Fetching upcoming fixtures...';
+    // 1. Fetch
+    state.progress.message = 'Scanning Global Fixtures...';
     render();
+    const rawMatches = await fetchLiveMatches({ maxMatches: 15 });
 
-    const matches = await fetchLiveMatches(
-      { maxMatches: 15, useAI: true },
-      (current, total, message) => {
-        state.progress = { current, total, message: message || 'Processing...' };
-        render();
+    // 2. Filter & Analyze
+    const validMatches = rawMatches.filter(m => m.data_quality >= 60);
+    const analyzed = [];
+
+    state.progress.total = validMatches.length;
+
+    for (let i = 0; i < validMatches.length; i++) {
+      state.progress.current = i + 1;
+      state.progress.message = `Analyzing: ${validMatches[i].home_team} vs ${validMatches[i].away_team}`;
+      render(); // Force UI update
+
+      // Rate limit helper
+      if (i > 0) await new Promise(r => setTimeout(r, 800));
+
+      try {
+        const analysis = await analyzeMatch(validMatches[i]);
+        if (analysis && analysis.recommended_bets) {
+          analyzed.push({ meta: validMatches[i], analysis });
+        }
+      } catch (e) {
+        console.error('Analysis failed for match', e);
       }
-    );
-
-    if (matches.length === 0) {
-      throw new Error('No matches found from any source. Try again later.');
     }
 
-    state.allMatches = matches;
-    state.totalAnalyzed = matches.length;
+    // 3. Process
+    const processed = processAnalysisResults(analyzed);
+    state.groupedBets = processed;
     state.lastUpdated = new Date();
+
+    // 4. Save
+    await writeToGist({
+      lastUpdated: state.lastUpdated.toISOString(),
+      stats: {
+        matches_analyzed: analyzed.length,
+        high_confidence: processed.high.length
+      },
+      predictions: processed
+    });
+
     state.isLoading = false;
-    state.mode = 'live';
-
-    updateState();
-
-    console.log(`📊 Loaded ${matches.length} live matches`);
+    render();
 
   } catch (error) {
-    console.error('Failed to load live data:', error);
     state.error = error.message;
     state.isLoading = false;
     render();
   }
 }
 
-function refreshData() {
-  clearApiCache();
-  clearPredictionCache();
-
-  if (state.mode === 'live') {
-    loadLiveData();
-  } else {
-    loadMockData();
-  }
-}
-
-function toggleMode() {
-  if (state.mode === 'mock') {
-    loadLiveData();
-  } else {
-    loadMockData();
-  }
-}
-
 // ============================================
-// SECTION LIMIT HANDLERS
-// ============================================
-
-function setSectionLimit(section, limit) {
-  state.sectionLimits[section] = limit;
-  render();
-}
-
-function toggleLowSection() {
-  state.lowSectionExpanded = !state.lowSectionExpanded;
-  render();
-}
-
-function toggleTheme() {
-  const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
-  const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-
-  document.documentElement.setAttribute('data-theme', newTheme);
-  localStorage.setItem('theme', newTheme);
-
-  // Re-render header to update the icon
-  render();
-}
-
-// ============================================
-// EVENT LISTENERS
-// ============================================
-
-// ============================================
-// EVENT LISTENERS
+// EVENT HANDLERS
 // ============================================
 
 function attachEventListeners() {
-  // Theme toggle button
-  const themeToggle = document.getElementById('theme-toggle');
-  if (themeToggle) {
-    themeToggle.addEventListener('click', toggleTheme);
-  }
+  // Theme
+  document.getElementById('theme-toggle')?.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    const next = current === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+    render();
+  });
 
-  // Mode toggle button
-  const modeToggle = document.getElementById('mode-toggle');
-  if (modeToggle) {
-    modeToggle.addEventListener('click', toggleMode);
-  }
+  // Admin Refresh
+  document.getElementById('refresh-btn')?.addEventListener('click', runLiveAnalysis);
 
-  // Refresh button (admin only)
-  const refreshBtn = document.getElementById('refresh-btn');
-  if (refreshBtn) {
-    if (state.isAdmin) {
-      refreshBtn.addEventListener('click', adminRefresh);
-    } else {
-      // Hide refresh button for non-admins
-      refreshBtn.style.display = 'none';
-    }
-  }
+  // Retry
+  document.getElementById('retry-btn')?.addEventListener('click', () => {
+    state.error = null;
+    init();
+  });
 
-  // Retry button (in error state) - admin only
-  const retryBtn = document.getElementById('retry-btn');
-  if (retryBtn) {
-    retryBtn.addEventListener('click', () => {
-      state.error = null;
-      if (state.isAdmin) {
-        adminRefresh();
-      } else {
-        init(); // Try to load from cache again
-      }
-    });
-  }
-
-  // Countdown Timer (if present in error/waiting state OR banner)
-  const countdownEl = document.getElementById('countdown-timer');
-  const bannerCountdownEl = document.getElementById('countdown-banner-timer');
-
-  if (countdownEl || bannerCountdownEl) {
-    // Clear any existing interval
-    if (window.countdownInterval) clearInterval(window.countdownInterval);
-
-    // Start new interval
-    window.countdownInterval = setInterval(() => {
-      const now = new Date();
-      const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000));
-      const hours = utcPlus1.getUTCHours();
-      let nextRefresh;
-
-      if (hours < 9) {
-        nextRefresh = new Date(utcPlus1);
-        nextRefresh.setUTCHours(9, 0, 0, 0);
-      } else if (hours < 15) {
-        nextRefresh = new Date(utcPlus1);
-        nextRefresh.setUTCHours(15, 0, 0, 0);
-      } else {
-        nextRefresh = new Date(utcPlus1);
-        nextRefresh.setDate(nextRefresh.getDate() + 1);
-        nextRefresh.setUTCHours(9, 0, 0, 0);
-      }
-
-      let diff = nextRefresh - utcPlus1;
-      if (diff < 0) diff = 0;
-
-      const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
-      const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const secondsLeft = Math.floor((diff % (1000 * 60)) / 1000);
-
-      if (countdownEl) {
-        countdownEl.textContent = `${hoursLeft}h ${minutesLeft}m ${secondsLeft}s`;
-      }
-
-      if (bannerCountdownEl) {
-        bannerCountdownEl.textContent = `${hoursLeft}h ${minutesLeft}m`;
-      }
-    }, 1000);
-  }
-
-  // Use mock data button (in error state)
-  const useMockBtn = document.getElementById('use-mock-btn');
-  if (useMockBtn) {
-    useMockBtn.addEventListener('click', loadMockData);
-  }
-
-  // Toggle buttons for each section
+  // Section Toggles
   document.querySelectorAll('.toggle-pill').forEach(btn => {
     btn.addEventListener('click', () => {
-      const section = btn.dataset.section;
-      const limit = btn.dataset.limit === 'all' ? 30 : parseInt(btn.dataset.limit);
-      setSectionLimit(section, limit);
+      state.sectionLimits[btn.dataset.section] = btn.dataset.limit === 'all' ? 50 : parseInt(btn.dataset.limit);
+      render();
     });
   });
 
-  // LOW section expand/collapse
-  const lowToggle = document.getElementById('low-section-toggle');
-  if (lowToggle) {
-    lowToggle.addEventListener('click', toggleLowSection);
-  }
-
-  // Hide LOW section button
-  const hideLowBtn = document.getElementById('hide-low-section');
-  if (hideLowBtn) {
-    hideLowBtn.addEventListener('click', toggleLowSection);
-  }
-}
-
-// ============================================
-// INITIALIZATION
-// ============================================
-
-async function init() {
-  console.log('🏆 BetPredict - AI-Powered Edge Finder');
-  console.log(`🔐 Admin mode: ${state.isAdmin ? 'YES' : 'NO'}`);
-
-  // Step 1: Try to load cached predictions from Gist
-  if (isGistConfigured()) {
-    state.isLoading = true;
-    state.progress = { current: 0, total: 0, message: 'Loading cached predictions...' };
+  // Low Section
+  document.getElementById('low-section-toggle')?.addEventListener('click', () => {
+    state.lowSectionExpanded = true;
     render();
-
-    const cached = await readFromGist();
-
-    if (cached && cached.predictions && cached.predictions.length > 0) {
-      console.log(`📦 Loaded ${cached.predictions.length} cached predictions`);
-      state.allMatches = cached.predictions;
-      state.lastUpdated = cached.lastUpdated ? new Date(cached.lastUpdated) : null;
-      state.totalAnalyzed = cached.predictions.length;
-      state.mode = 'cached';
-      state.isLoading = false;
-      updateState();
-      return;
-    } else {
-      console.log('📭 No cached predictions found');
-    }
-  }
-
-  // Step 2: If admin and no cache, load live data
-  if (state.isAdmin) {
-    loadLiveData();
-  } else {
-    // Non-admin with no cache: show empty state
-    state.isLoading = false;
-    state.error = 'No predictions available yet. An admin needs to refresh the data.';
+  });
+  document.getElementById('hide-low-section')?.addEventListener('click', () => {
+    state.lowSectionExpanded = false;
     render();
-  }
+  });
 }
 
-/**
- * Admin-only: Refresh and save to Gist
- */
-async function adminRefresh() {
-  if (!state.isAdmin) {
-    console.warn('⛔ Refresh blocked: Admin access required');
-    return;
-  }
-
-  await loadLiveData();
-
-  // Save to Gist after successful load
-  if (state.allMatches.length > 0 && isGistConfigured()) {
-    const saved = await writeToGist(state.allMatches);
-    if (saved) {
-      console.log('✅ Predictions saved to Gist for all users');
-    }
-  }
-}
-
-// Start the application
+// Start
 document.addEventListener('DOMContentLoaded', init);
-
-// Export for console debugging
-window.betpredict = {
-  state,
-  loadMockData,
-  loadLiveData,
-  adminRefresh,
-  refreshData,
-  toggleMode,
-  setSectionLimit,
-  toggleLowSection,
-  toggleTheme
-};

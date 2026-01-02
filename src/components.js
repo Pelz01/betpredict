@@ -20,6 +20,7 @@ const TOGGLE_OPTIONS = [5, 10, 15, 20, 'all'];
 // ============================================
 
 function formatTime(isoString) {
+  if (!isoString) return '';
   const date = new Date(isoString);
   const now = new Date();
   const diff = date - now;
@@ -50,52 +51,34 @@ function formatTimestamp(date) {
 // ============================================
 
 export function renderHeader(state) {
-  const isCached = state.mode === 'cached';
-  const isLive = state.mode === 'live';
   const timestamp = formatTimestamp(state.lastUpdated);
   const totalMatches = state.totalAnalyzed || 0;
-  const positiveEV = (state.groupedMatches?.high?.length || 0) +
+
+  // Calculate total bets found
+  const totalBets = (state.groupedMatches?.high?.length || 0) +
     (state.groupedMatches?.medium?.length || 0) +
     (state.groupedMatches?.low?.length || 0);
 
-  // Get current theme from DOM
   const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
   const isDark = currentTheme === 'dark';
-
-  // Mode label
-  // Users shouldn't see "Cached" - it looks like old data.
-  // We treat cached Gist data as "Live" for the end user.
-  let modeLabel = 'Live';
-  let modeClass = 'mode-live';
-
-  if (state.mode === 'mock') {
-    modeLabel = 'Mock';
-    modeClass = 'mode-mock';
-  } else if (state.mode === 'cached' && state.isAdmin) {
-    // Only admins need to know it's actually cached
-    modeLabel = 'Cached';
-    modeClass = 'mode-cached';
-  }
 
   return `
     <header class="header">
       <div class="logo">
         <div class="logo-icon">🏆</div>
         <div>
-          <div class="logo-text">BETPREDICT</div>
-          <div class="logo-tagline">AI-Powered Edge Finder</div>
+          <div class="logo-text">PREDICT</div>
+          <div class="logo-tagline">AI Edge Finder</div>
         </div>
       </div>
       
       <div class="header-actions">
         ${state.isAdmin ? `<span style="background: var(--status-high); color: white; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600;">🔐 ADMIN</span>` : ''}
         
-        <!-- Theme Toggle -->
         <button class="btn-icon" id="theme-toggle" title="Toggle Theme">
           ${isDark ? '☀️' : '🌙'}
         </button>
 
-        <!-- Refresh Button (shown for all, hidden via JS for non-admin) -->
         <button class="btn-icon" id="refresh-btn" title="Admin: Refresh predictions">
           🔄
         </button>
@@ -103,11 +86,11 @@ export function renderHeader(state) {
 
       ${state.lastUpdated ? `
         <div class="header-meta">
-          <span class="meta-item">Last updated: <strong>${timestamp}</strong></span>
+          <span class="meta-item">Updated: <strong>${timestamp}</strong></span>
           <span class="meta-divider">|</span>
-          <span class="meta-item">Matches: <strong>${totalMatches}</strong></span>
+          <span class="meta-item">Analyzed: <strong>${totalMatches}</strong></span>
           <span class="meta-divider">|</span>
-          <span class="meta-item highlight">+EV Found: ${positiveEV}</span>
+          <span class="meta-item highlight">+EV Bets: ${totalBets}</span>
         </div>
       ` : ''}
     </header>
@@ -127,18 +110,13 @@ function renderToggleButtons(section, currentLimit, totalAvailable) {
       ${TOGGLE_OPTIONS.map(opt => {
     const value = opt === 'all' ? maxVisible : opt;
     const label = opt === 'all' ? allLabel : opt;
-    // Determine active state strictly
     let isActive = false;
     if (opt === 'all') {
-      isActive = currentLimit >= maxVisible; // If limit is high enough to show all
+      isActive = currentLimit >= maxVisible;
     } else {
       isActive = currentLimit === opt;
     }
-
-    const isDisabled = typeof opt === 'number' && opt > totalAvailable && opt !== 5; // Always keep 5 enable roughly? or strict
-    // Correction: Disable if the specific option step is unreachable? 
-    // Actually, simpler: Disable if option > totalAvailable (unless it's the lowest option that covers everything?)
-    const disabledClass = (typeof opt === 'number' && opt > totalAvailable) ? 'disabled' : '';
+    const disabledClass = (typeof opt === 'number' && opt > totalAvailable && opt !== 5) ? 'disabled' : '';
 
     return `
           <button 
@@ -165,10 +143,9 @@ export function renderConfidenceSection(options) {
     icon,
     title,
     subtitle,
-    matches,
+    matches, // This is now an array of "Bet" objects
     totalAvailable,
     currentLimit,
-    stats,
     isLow = false
   } = options;
 
@@ -181,7 +158,6 @@ export function renderConfidenceSection(options) {
           <h2>${icon} ${title}</h2>
           <span class="section-subtitle">${subtitle}</span>
         </div>
-        
         ${renderToggleButtons(type, currentLimit, totalAvailable)}
       </div>
       
@@ -190,16 +166,13 @@ export function renderConfidenceSection(options) {
           <span>⚠️</span>
           <div>
             <strong>High Risk Area</strong><br/>
-            These picks have 50-59% confidence. Edge exists but variance is high. Use strict bankroll management.
+            These picks have lower confidence. Edge exists but variance is high. Use strict bankroll management.
           </div>
-          <button class="hide-section-btn" id="hide-low-section" style="margin-left:auto; background:none; border:none; text-decoration:underline; cursor:pointer;">
-            Hide
-          </button>
         </div>
       ` : ''}
 
       <div class="match-grid">
-        ${matches.map(match => renderMatchCard(match)).join('')}
+        ${matches.map(bet => renderBetCard(bet)).join('')}
       </div>
       
       <div style="margin-top: var(--space-lg); text-align: center; color: var(--text-tertiary); font-size: 0.875rem;">
@@ -209,16 +182,8 @@ export function renderConfidenceSection(options) {
   `;
 }
 
-// ============================================
-// LOW SECTION COLLAPSED COMPONENT
-// ============================================
-
 export function renderLowSectionCollapsed(count) {
-  // Re-using the confidence-section class but with 'collapsed' styling inline or via class
-  // We didn't define specific .collapsed styles in the new CSS, so we'll use a simple container
-  // that uses the glass style.
   if (count === 0) return '';
-
   return `
     <section class="confidence-section low" id="low-section-toggle" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding: var(--space-md) var(--space-lg);">
       <div style="display:flex; align-items:center; gap:var(--space-md)">
@@ -236,52 +201,63 @@ export function renderLowSectionCollapsed(count) {
 }
 
 // ============================================
-// MATCH CARD COMPONENT
+// BET CARD COMPONENT (Replaces Match Card)
 // ============================================
 
-function renderMatchCard(match) {
-  const sportIcon = SPORT_ICONS[match.sport] || '🎮';
-  const homeIsRecommended = match.recommendation === 'home';
-  const awayIsRecommended = match.recommendation === 'away';
-  const drawIsRecommended = match.recommendation === 'draw';
+function renderBetCard(bet) {
+  // New Bet Object Structure:
+  // { match_display, league, kickoff, market, pick, odds, ev, confidence, reason }
+
+  const isPositiveEV = bet.ev > 0;
 
   return `
-    <article class="match-card" data-id="${match.id}">
+    <article class="match-card" data-id="${bet.match_id}">
       <div class="card-header">
-        <span class="sport-badge">${sportIcon} ${match.league}</span>
-        <span>${formatTime(match.kickoff)}</span>
+        <span class="sport-badge">⚽ ${bet.league}</span>
+        <span>${formatTime(bet.kickoff)}</span>
       </div>
       
       <div class="match-teams">
-        <div class="team-row ${homeIsRecommended ? 'recommended' : ''}">
-          <span class="team-name">${match.teams.home}</span>
-          <span class="team-odds">${match.odds.home.toFixed(2)}</span>
+        <div class="match-title">
+            ${bet.match_display}
         </div>
-        ${match.odds.draw ? `
-        <div class="team-row ${drawIsRecommended ? 'recommended' : ''}" style="font-size:0.9em; opacity:0.8;">
-          <span class="team-name" style="font-weight:400">Draw</span>
-          <span class="team-odds">${match.odds.draw.toFixed(2)}</span>
-        </div>` : ''}
-        <div class="team-row ${awayIsRecommended ? 'recommended' : ''}">
-          <span class="team-name">${match.teams.away}</span>
-          <span class="team-odds">${match.odds.away.toFixed(2)}</span>
+      </div>
+
+      <div class="bet-market-box">
+        <div class="bet-market-header">
+            <span class="bet-market-label">${bet.market}</span>
+            <span class="bet-odds-display">${bet.odds.toFixed(2)}</span>
+        </div>
+        <div class="bet-pick-name">
+            ${bet.pick}
         </div>
       </div>
       
       <div class="card-stats">
         <div class="stat-box">
-          <span class="stat-label">EDGE</span>
-          <span class="stat-value ev-positive">${match.metrics.ev.toFixed(1)}%</span>
+          <span class="stat-label">EDGE (EV)</span>
+          <span class="stat-value ${isPositiveEV ? 'ev-positive' : ''}">${bet.ev.toFixed(1)}%</span>
         </div>
         <div class="stat-box">
           <span class="stat-label">KELLY</span>
-          <span class="stat-value">${match.metrics.kelly_stake.toFixed(1)}%</span>
+          <span class="stat-value">${bet.stake || '0%'}</span>
         </div>
         <div class="stat-box">
           <span class="stat-label">CONFIDENCE</span>
-          <span class="stat-value">${match.confidencePercent}%</span>
+          <span class="stat-value">${bet.confidence}%</span>
         </div>
       </div>
+
+      <div class="bet-reason">
+        "${bet.reason}"
+      </div>
+      
+      ${bet.risk_factors && bet.risk_factors.length > 0 ? `
+        <div class="bet-risks">
+            ⚠️ ${bet.risk_factors.join(', ')}
+        </div>
+      ` : ''}
+
     </article>
   `;
 }
@@ -291,143 +267,35 @@ function renderMatchCard(match) {
 // ============================================
 
 export function renderLoadingState(progress = { current: 0, total: 0, message: '' }) {
-  // Inline simplified loading for now, matching the theme
   return `
     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; text-align:center;">
-      <div class="spinner" style="font-size:3rem; margin-bottom:1rem; animation: spin 1s infinite linear;">🎯</div>
-      <h2 style="font-family:var(--font-display); margin-bottom:0.5rem">Analyzing Market Data...</h2>
-      <p style="color:var(--text-secondary)">Finding the sharpest edges for you</p>
+      <div class="spinner" style="font-size:3rem; margin-bottom:1rem; opacity:0.8;">🧠</div>
+      <h2 style="font-family:var(--font-display); margin-bottom:0.5rem; font-weight:600;">PREDICT AI is Thinking...</h2>
+      <p style="color:var(--text-secondary);">Scanning matches • Analyzing news • Calculating EV</p>
       ${progress.total > 0 ? `
         <div style="width:200px; height:4px; background:var(--bg-surface-elevated); margin-top:1rem; border-radius:2px; overflow:hidden">
             <div style="width:${(progress.current / progress.total) * 100}%; height:100%; background:var(--accent-primary); transition:width 0.3s"></div>
         </div>
-        <p style="margin-top:0.5rem; font-size:0.8rem; color:var(--text-tertiary)">${progress.current} / ${progress.total}</p>
+        <p style="margin-top:0.5rem; font-size:0.8rem; color:var(--text-tertiary)">${progress.message}</p>
       ` : ''}
-      <style>@keyframes spin { 0% {transform:rotate(0deg);} 100% {transform:rotate(360deg);} }</style>
     </div>
   `;
 }
 
 export function renderErrorState(errorMessage) {
-  // Calculate time until next refresh (9 AM or 3 PM UTC+1)
-  const now = new Date();
-  const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000)); // Adjust for UTC+1
-
-  const hours = utcPlus1.getUTCHours();
-  let nextRefresh;
-
-  if (hours < 9) {
-    // Before 9 AM - next is 9 AM today
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setUTCHours(9, 0, 0, 0);
-  } else if (hours < 15) {
-    // Before 3 PM - next is 3 PM today
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setUTCHours(15, 0, 0, 0);
-  } else {
-    // After 3 PM - next is 9 AM tomorrow
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setDate(nextRefresh.getDate() + 1);
-    nextRefresh.setUTCHours(9, 0, 0, 0);
-  }
-
-  // Calculate countdown
-  let diff = nextRefresh - utcPlus1;
-  if (diff < 0) diff = 0; // Safety
-
-  const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
-  const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-  const nextTimeLabel = nextRefresh.getUTCHours() === 9 ? '9:00 AM' : '3:00 PM';
-
   return `
     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:70vh; text-align:center; padding: 2rem;">
-      <div style="font-size:5rem; margin-bottom:1.5rem; filter: grayscale(0.3);">🏆</div>
-      
-      <h1 style="font-family:var(--font-display); font-size:2rem; margin-bottom:0.5rem; background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
-        Predictions Coming Soon
+      <div style="font-size:5rem; margin-bottom:1.5rem; filter: grayscale(0.3);">⚠️</div>
+      <h1 style="font-family:var(--font-display); font-size:2rem; margin-bottom:0.5rem; color: var(--text-primary);">
+        System Offline
       </h1>
-      
       <p style="color:var(--text-secondary); max-width:400px; margin-bottom:2rem; line-height:1.6;">
-        Our AI is preparing the next set of predictions for you. Check back at the next scheduled refresh.
+        ${errorMessage || 'Unable to load prediction data.'}
       </p>
-      
-      <div style="background:var(--glass-bg); backdrop-filter:blur(10px); border:1px solid var(--glass-border); border-radius:16px; padding:2rem 3rem; margin-bottom:2rem;">
-        <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-tertiary); margin-bottom:0.5rem;">
-          Next Refresh In
-        </div>
-        <div id="countdown-timer" style="font-family:var(--font-display); font-size:2.5rem; font-weight:700; color:var(--accent-primary);">
-          ${hoursLeft}h ${minutesLeft}m
-        </div>
-        <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.5rem;">
-          📅 ${nextTimeLabel} (UTC+1)
-        </div>
-      </div>
-      
-      <div style="display:flex; gap:1rem; flex-wrap:wrap; justify-content:center;">
-        <button class="mode-toggle-btn mode-live" id="retry-btn" style="cursor:pointer;">
-          <span class="indicator"></span>
-          <span>🔄 Check Again</span>
-        </button>
-      </div>
-      
-      <p style="margin-top:3rem; font-size:0.75rem; color:var(--text-tertiary); max-width:300px;">
-        💡 Predictions refresh automatically at <strong>9:00 AM</strong> and <strong>3:00 PM</strong> daily
-      </p>
-    </div>
-  `;
-}
-
-export function renderCountdownBanner() {
-  // Calculate time until next refresh (9 AM or 3 PM UTC+1)
-  const now = new Date();
-  const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000)); // Adjust for UTC+1
-
-  const hours = utcPlus1.getUTCHours();
-  let nextRefresh;
-
-  if (hours < 9) {
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setUTCHours(9, 0, 0, 0);
-  } else if (hours < 15) {
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setUTCHours(15, 0, 0, 0);
-  } else {
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setDate(nextRefresh.getDate() + 1);
-    nextRefresh.setUTCHours(9, 0, 0, 0);
-  }
-
-  let diff = nextRefresh - utcPlus1;
-  if (diff < 0) diff = 0;
-
-  const hoursLeft = Math.floor(diff / (1000 * 60 * 60));
-  const minutesLeft = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-  return `
-    <div class="countdown-banner" style="
-      background: var(--bg-surface); 
-      border-bottom: 1px solid var(--border-color); 
-      padding: 0.75rem 1rem; 
-      display: flex; 
-      justify-content: center; 
-      align-items: center; 
-      gap: 1rem;
-      font-size: 0.9rem;
-      color: var(--text-secondary);
-      width: 100%;
-      position: relative;
-      z-index: 10;
-    ">
-      <span>⚡ Next prediction drop in:</span>
-      <span id="countdown-banner-timer" style="
-        font-family: var(--font-display); 
-        font-weight: 700; 
-        color: var(--accent-primary);
-        font-variant-numeric: tabular-nums;
-      ">
-        ${hoursLeft}h ${minutesLeft}m
-      </span>
+      <button class="mode-toggle-btn mode-live" id="retry-btn" style="cursor:pointer;">
+        <span class="indicator"></span>
+        <span>Retry Connection</span>
+      </button>
     </div>
   `;
 }
@@ -435,7 +303,7 @@ export function renderCountdownBanner() {
 export function renderFooter() {
   return `
     <footer style="text-align: center; padding: 2rem; color: var(--text-tertiary); font-size: 0.85rem; font-family: var(--font-body); width: 100%;">
-      Built with love <span style="color: #22c55e;">💚</span> by Pelz
+      PREDICT Autonomous System • Powered by AI
     </footer>
   `;
 }

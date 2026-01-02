@@ -293,3 +293,14 @@ export async function testConnection() {
         return false;
     }
 }
+
+/**
+ * Extract weather from Sportmonks fixture
+ * @param {object} fixture 
+ */
+export function extractWeather(fixture) {
+    if (fixture.weatherReport && fixture.weatherReport.length > 0) {
+        return fixture.weatherReport[0];
+    }
+    return null;
+}

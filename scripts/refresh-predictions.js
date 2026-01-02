@@ -1,298 +1,335 @@
 /**
- * BetPredict - Scheduled Refresh Script
- * Runs via GitHub Actions to fetch predictions and save to Gist
+ * Oracle Pro - Autonomous Refresh Script (Node.js)
+ * For GitHub Actions - Self-contained, no browser dependencies
  * 
- * Required environment variables:
- * - API_FOOTBALL_KEY
- * - SPORTMONKS_API_KEY
- * - OPENROUTER_API_KEY
- * - GIST_ID
- * - GITHUB_TOKEN
+ * Workflow:
+ * 1. Fetch Fixtures from API-Football
+ * 2. Enrich with Odds, Form, H2H
+ * 3. Analyze with AI (OpenRouter)
+ * 4. Filter Profitable Bets (EV > 5%)
+ * 5. Save to Gist
  */
 
+import fs from 'fs';
+import path from 'path';
+
+// Load environment variables manually (no dotenv dependency)
+try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+        const envConfig = fs.readFileSync(envPath, 'utf8');
+        envConfig.split(/\r?\n/).forEach(line => {
+            const parts = line.split('=');
+            if (parts.length >= 2) {
+                const key = parts[0].trim();
+                const value = parts.slice(1).join('=').trim().replace(/^["']|["']$/g, ''); // Remove quotes
+                if (key && !key.startsWith('#')) {
+                    process.env[key] = value;
+                }
+            }
+        });
+        console.log('✅ Loaded .env file');
+    }
+} catch (e) {
+    console.warn('⚠️ Could not load .env file:', e.message);
+}
+
+// ============================================
+// CONFIGURATION
+// ============================================
+
+const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || process.env.VITE_API_FOOTBALL_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || process.env.VITE_OPENROUTER_MODEL || 'anthropic/claude-sonnet-4-20250514';
+const GIST_ID = process.env.GIST_ID || process.env.VITE_GIST_ID;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.VITE_GITHUB_TOKEN;
+
 const API_FOOTBALL_BASE = 'https://v3.football.api-sports.io';
-const SPORTMONKS_BASE = 'https://api.sportmonks.com/v3/football';
-const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+// Top 5 European Leagues
+const LEAGUES = [39, 140, 135, 78, 61]; // EPL, La Liga, Serie A, Bundesliga, Ligue 1
 
 // ============================================
-// API FETCHING
+// API-FOOTBALL HELPERS
 // ============================================
 
-async function fetchApiFootball(endpoint, params = {}) {
+async function apiFootballRequest(endpoint, params = {}) {
     const url = new URL(`${API_FOOTBALL_BASE}${endpoint}`);
     Object.entries(params).forEach(([k, v]) => url.searchParams.append(k, v));
 
     const response = await fetch(url, {
-        headers: {
-            'x-rapidapi-host': 'v3.football.api-sports.io',
-            'x-rapidapi-key': process.env.API_FOOTBALL_KEY
-        }
+        headers: { 'x-apisports-key': API_FOOTBALL_KEY }
     });
 
-    if (!response.ok) throw new Error(`API-Football error: ${response.status}`);
+    if (!response.ok) throw new Error(`API-Football: ${response.status}`);
     const json = await response.json();
-
-    if (json.errors && Object.keys(json.errors).length > 0) {
-        console.warn('API-Football errors:', json.errors);
-        return [];
-    }
-
     return json.response || [];
 }
 
-async function fetchSportmonks(endpoint, includes = []) {
-    let url = `${SPORTMONKS_BASE}${endpoint}?api_token=${process.env.SPORTMONKS_API_KEY}`;
-    if (includes.length > 0) {
-        url += `&include=${includes.join(';')}`;
-    }
-
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Sportmonks error: ${response.status}`);
-    const json = await response.json();
-    return json.data || [];
-}
-
-// ============================================
-// DATA PROCESSING
-// ============================================
-
-function formatDate(date) {
-    return date.toISOString().split('T')[0];
-}
-
 async function getFixtures() {
-    const today = formatDate(new Date());
-    const tomorrow = formatDate(new Date(Date.now() + 86400000));
-    const dayAfter = formatDate(new Date(Date.now() + 172800000));
+    const today = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
     let allFixtures = [];
-
-    // Try API-Football
-    try {
-        console.log('📡 Fetching from API-Football...');
-        for (const date of [today, tomorrow, dayAfter]) {
-            const fixtures = await fetchApiFootball('/fixtures', { date });
-            const upcoming = fixtures.filter(f => f.fixture?.status?.short === 'NS');
-            allFixtures.push(...upcoming.map(f => ({
-                id: f.fixture.id,
-                homeTeam: f.teams.home.name,
-                awayTeam: f.teams.away.name,
-                homeLogo: f.teams.home.logo,
-                awayLogo: f.teams.away.logo,
-                league: f.league.name,
-                leagueLogo: f.league.logo,
-                kickoff: f.fixture.date,
-                odds: { home: 2.5, draw: 3.3, away: 2.8 }, // Default odds
-                source: 'api-football'
-            })));
-        }
-        console.log(`✅ API-Football: ${allFixtures.length} fixtures`);
-    } catch (error) {
-        console.warn('⚠️ API-Football failed:', error.message);
-    }
-
-    // Try Sportmonks
-    try {
-        console.log('📡 Fetching from Sportmonks...');
-        const start = formatDate(new Date());
-        const end = formatDate(new Date(Date.now() + 259200000)); // +3 days
-
-        const fixtures = await fetchSportmonks(
-            `/fixtures/between/${start}/${end}`,
-            ['participants', 'odds', 'league']
-        );
-
-        const existingMatchups = new Set(
-            allFixtures.map(f => `${f.homeTeam.toLowerCase()}-${f.awayTeam.toLowerCase()}`)
-        );
-
-        fixtures.forEach(f => {
-            const home = f.participants?.find(p => p.meta?.location === 'home');
-            const away = f.participants?.find(p => p.meta?.location === 'away');
-
-            if (home && away) {
-                const matchKey = `${home.name.toLowerCase()}-${away.name.toLowerCase()}`;
-                if (!existingMatchups.has(matchKey)) {
-                    allFixtures.push({
-                        id: f.id,
-                        homeTeam: home.name,
-                        awayTeam: away.name,
-                        homeLogo: home.image_path,
-                        awayLogo: away.image_path,
-                        league: f.league?.name || 'Unknown',
-                        leagueLogo: f.league?.image_path,
-                        kickoff: f.starting_at,
-                        odds: { home: 2.5, draw: 3.3, away: 2.8 },
-                        source: 'sportmonks'
-                    });
-                    existingMatchups.add(matchKey);
-                }
-            }
+    for (const leagueId of LEAGUES) {
+        const fixtures = await apiFootballRequest('/fixtures', {
+            league: leagueId,
+            from: today,
+            to: tomorrow,
+            season: '2024'
         });
-        console.log(`✅ Sportmonks: added unique fixtures, total now ${allFixtures.length}`);
-    } catch (error) {
-        console.warn('⚠️ Sportmonks failed:', error.message);
+        allFixtures = allFixtures.concat(fixtures);
+        await sleep(300); // Rate limit
     }
-
-    return allFixtures.slice(0, 20); // Limit to 20
+    return allFixtures;
 }
 
-async function analyzeWithAI(fixtures) {
-    console.log('🤖 Analyzing with AI...');
+async function getOdds(fixtureId) {
+    const odds = await apiFootballRequest('/odds', { fixture: fixtureId });
+    return extractBestOdds(odds);
+}
 
-    const predictions = [];
+function extractBestOdds(oddsData) {
+    if (!oddsData || oddsData.length === 0) return null;
+    const bookmakers = oddsData[0]?.bookmakers || [];
 
-    for (const fixture of fixtures) {
-        try {
-            const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: process.env.OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free',
-                    messages: [{
-                        role: 'user',
-                        content: `Analyze this soccer match for betting value:
-${fixture.homeTeam} vs ${fixture.awayTeam}
-League: ${fixture.league}
-Kickoff: ${fixture.kickoff}
-Odds: Home ${fixture.odds.home}, Draw ${fixture.odds.draw}, Away ${fixture.odds.away}
-
-Return JSON only: {"home_prob": 0.XX, "draw_prob": 0.XX, "away_prob": 0.XX, "best_bet": "home|draw|away", "confidence": "HIGH|MEDIUM|LOW", "reasoning": "brief reason"}`
-                    }],
-                    response_format: { type: 'json_object' }
-                })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                const content = data.choices?.[0]?.message?.content;
-                if (content) {
-                    const analysis = JSON.parse(content);
-
-                    // Calculate EV
-                    const probs = {
-                        home: analysis.home_prob || 0.33,
-                        draw: analysis.draw_prob || 0.34,
-                        away: analysis.away_prob || 0.33
-                    };
-
-                    const evHome = (probs.home * fixture.odds.home - 1) * 100;
-                    const evDraw = (probs.draw * fixture.odds.draw - 1) * 100;
-                    const evAway = (probs.away * fixture.odds.away - 1) * 100;
-
-                    const bestEV = Math.max(evHome, evDraw, evAway);
-                    const recommendation = evHome === bestEV ? 'home' : evDraw === bestEV ? 'draw' : 'away';
-
-                    predictions.push({
-                        id: `match_${fixture.id}`,
-                        fixtureId: fixture.id,
-                        sport: 'soccer',
-                        league: fixture.league,
-                        leagueLogo: fixture.leagueLogo,
-                        teams: {
-                            home: fixture.homeTeam,
-                            away: fixture.awayTeam,
-                            homeLogo: fixture.homeLogo,
-                            awayLogo: fixture.awayLogo
-                        },
-                        kickoff: fixture.kickoff,
-                        odds: fixture.odds,
-                        model: {
-                            home_prob: probs.home,
-                            draw_prob: probs.draw,
-                            away_prob: probs.away
-                        },
-                        metrics: {
-                            ev: parseFloat(bestEV.toFixed(1)),
-                            kelly_stake: Math.max(0, parseFloat(((probs[recommendation] * fixture.odds[recommendation] - 1) / (fixture.odds[recommendation] - 1) * 100).toFixed(1))),
-                            confidence_tier: analysis.confidence || 'MEDIUM'
-                        },
-                        recommendation,
-                        ai: {
-                            confidence: analysis.confidence || 'MEDIUM',
-                            reasoning: analysis.reasoning || ''
-                        },
-                        _source: fixture.source
-                    });
-                }
+    for (const bm of bookmakers) {
+        const market = bm.bets?.find(b => b.name === 'Match Winner');
+        if (market) {
+            const home = market.values?.find(v => v.value === 'Home')?.odd;
+            const draw = market.values?.find(v => v.value === 'Draw')?.odd;
+            const away = market.values?.find(v => v.value === 'Away')?.odd;
+            if (home && draw && away) {
+                return { home: parseFloat(home), draw: parseFloat(draw), away: parseFloat(away) };
             }
-
-            // Rate limit delay
-            await new Promise(r => setTimeout(r, 500));
-
-        } catch (error) {
-            console.warn(`Failed to analyze ${fixture.homeTeam} vs ${fixture.awayTeam}:`, error.message);
         }
     }
-
-    console.log(`✅ Analyzed ${predictions.length} matches`);
-    return predictions;
+    return null;
 }
 
-async function saveToGist(predictions) {
-    console.log('💾 Saving to Gist...');
+async function getTeamForm(teamId) {
+    const fixtures = await apiFootballRequest('/fixtures', { team: teamId, last: 5 });
+    let wins = 0, draws = 0, losses = 0, goalsFor = 0, goalsAgainst = 0;
 
-    const payload = {
-        lastUpdated: new Date().toISOString(),
-        predictions
-    };
+    fixtures.forEach(f => {
+        const isHome = f.teams.home.id === teamId;
+        const teamGoals = isHome ? f.goals.home : f.goals.away;
+        const oppGoals = isHome ? f.goals.away : f.goals.home;
+        goalsFor += teamGoals || 0;
+        goalsAgainst += oppGoals || 0;
+        if (teamGoals > oppGoals) wins++;
+        else if (teamGoals < oppGoals) losses++;
+        else draws++;
+    });
 
-    const response = await fetch(`https://api.github.com/gists/${process.env.GIST_ID}`, {
+    return { wins, draws, losses, goalsFor, goalsAgainst, matches: fixtures.length };
+}
+
+// ============================================
+// ORACLE AI ANALYSIS
+// ============================================
+
+const ORACLE_PROMPT = `You are ORACLE PRO - an autonomous sports betting AI.
+
+TASK: Analyze the match data and return profitable betting opportunities (EV > 5%).
+
+ANALYSIS STEPS:
+1. Evaluate team form (35% weight)
+2. Consider head-to-head if available (15%)
+3. Factor in home advantage and situational context (15%)
+4. Analyze market odds for inefficiencies
+
+OUTPUT: Return ONLY valid JSON with this structure:
+{
+  "recommended_bets": [
+    {
+      "market": "Match Result",
+      "pick": "Home Win",
+      "odds": 1.85,
+      "ev": 8.5,
+      "confidence": 75,
+      "tier": "STRONG",
+      "stake": "3% Kelly",
+      "simple_reason": "Strong home form + weak away defense"
+    }
+  ],
+  "news_impact": { "has_breaking_news": false }
+}
+
+If no profitable bets found (EV < 5%), return: { "recommended_bets": [] }`;
+
+async function analyzeWithAI(matchData) {
+    const response = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+            'HTTP-Referer': 'https://oracle-pro.app',
+            'X-Title': 'Oracle Pro'
+        },
+        body: JSON.stringify({
+            model: OPENROUTER_MODEL,
+            messages: [
+                { role: 'system', content: ORACLE_PROMPT },
+                { role: 'user', content: `ANALYZE:\n${JSON.stringify(matchData, null, 2)}` }
+            ],
+            temperature: 0.2,
+            max_tokens: 1500
+        })
+    });
+
+    if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`OpenRouter: ${response.status} - ${err}`);
+    }
+
+    const json = await response.json();
+    const content = json.choices[0]?.message?.content || '{}';
+
+    // Parse JSON (handle markdown code blocks)
+    let cleaned = content.trim();
+    if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    }
+
+    return JSON.parse(cleaned);
+}
+
+// ============================================
+// GIST STORAGE
+// ============================================
+
+async function saveToGist(data) {
+    if (!GIST_ID || !GITHUB_TOKEN) {
+        console.warn('⚠️ Gist not configured, skipping save');
+        return;
+    }
+
+    const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
         method: 'PATCH',
         headers: {
-            'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+            'Authorization': `Bearer ${GITHUB_TOKEN}`,
             'Content-Type': 'application/json',
             'Accept': 'application/vnd.github.v3+json'
         },
         body: JSON.stringify({
             files: {
-                'predictions.json': {
-                    content: JSON.stringify(payload, null, 2)
-                }
+                'oracle_predictions.json': { content: JSON.stringify(data, null, 2) }
             }
         })
     });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`Gist update failed: ${error.message}`);
-    }
-
-    console.log('✅ Saved to Gist!');
+    if (!response.ok) throw new Error(`Gist: ${response.status}`);
+    console.log('✅ Saved to Gist');
 }
 
 // ============================================
-// MAIN
+// MAIN ORCHESTRATOR
 // ============================================
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 async function main() {
-    console.log('🏆 BetPredict Scheduled Refresh');
+    console.log('🏆 Oracle Pro - Starting...');
     console.log(`📅 ${new Date().toISOString()}`);
 
     try {
+        // Step 1: Fetch Fixtures
+        console.log('📡 Fetching fixtures...');
         const fixtures = await getFixtures();
+        console.log(`📊 Found ${fixtures.length} fixtures`);
 
         if (fixtures.length === 0) {
-            console.log('⚠️ No fixtures found');
-            process.exit(0);
+            console.log('No fixtures found. Exiting.');
+            return;
         }
 
-        const predictions = await analyzeWithAI(fixtures);
+        // Step 2: Enrich & Analyze (limit to 10 for API cost)
+        const predictions = [];
+        const limit = Math.min(fixtures.length, 10);
 
-        if (predictions.length === 0) {
-            console.log('⚠️ No predictions generated');
-            process.exit(0);
+        for (let i = 0; i < limit; i++) {
+            const f = fixtures[i];
+            const home = f.teams.home;
+            const away = f.teams.away;
+            console.log(`🔍 [${i + 1}/${limit}] ${home.name} vs ${away.name}`);
+
+            try {
+                // Get enriched data
+                const [odds, homeForm, awayForm] = await Promise.all([
+                    getOdds(f.fixture.id).catch(() => ({ home: 2.0, draw: 3.3, away: 3.0 })),
+                    getTeamForm(home.id).catch(() => ({})),
+                    getTeamForm(away.id).catch(() => ({}))
+                ]);
+
+                const matchData = {
+                    match_id: `match_${f.fixture.id}`,
+                    home_team: home.name,
+                    away_team: away.name,
+                    league: f.league.name,
+                    kickoff: f.fixture.date,
+                    odds: odds || { home: 2.0, draw: 3.3, away: 3.0 },
+                    home_form: homeForm,
+                    away_form: awayForm
+                };
+
+                // AI Analysis
+                await sleep(1000); // Rate limit
+                const analysis = await analyzeWithAI(matchData);
+
+                if (analysis.recommended_bets?.length > 0) {
+                    predictions.push({
+                        meta: matchData,
+                        analysis
+                    });
+                }
+
+            } catch (err) {
+                console.error(`❌ Failed: ${home.name} vs ${away.name}:`, err.message);
+            }
         }
 
-        await saveToGist(predictions);
+        // Step 3: Process & Filter
+        const allBets = [];
+        predictions.forEach(p => {
+            (p.analysis.recommended_bets || []).forEach(bet => {
+                if (bet.ev >= 5 && bet.confidence >= 60) {
+                    allBets.push({
+                        match_id: p.meta.match_id,
+                        match_display: `${p.meta.home_team} vs ${p.meta.away_team}`,
+                        league: p.meta.league,
+                        kickoff: p.meta.kickoff,
+                        ...bet,
+                        risk_factors: []
+                    });
+                }
+            });
+        });
 
-        console.log(`🎉 Done! ${predictions.length} predictions saved.`);
+        allBets.sort((a, b) => b.ev - a.ev);
+
+        const result = {
+            lastUpdated: new Date().toISOString(),
+            stats: {
+                matches_analyzed: predictions.length,
+                profitable_bets: allBets.length
+            },
+            predictions: {
+                high: allBets.filter(b => b.confidence >= 80),
+                medium: allBets.filter(b => b.confidence >= 60 && b.confidence < 80),
+                low: []
+            }
+        };
+
+        console.log(`💰 Found ${allBets.length} profitable bets`);
+
+        // Step 4: Save
+        await saveToGist(result);
+        console.log('🎉 Complete!');
 
     } catch (error) {
-        console.error('❌ Refresh failed:', error);
+        console.error('❌ Fatal:', error);
         process.exit(1);
     }
 }

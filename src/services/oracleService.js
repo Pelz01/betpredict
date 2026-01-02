@@ -7,294 +7,179 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
 const MODEL = import.meta.env.VITE_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
 
-// Cache for AI predictions (longer cache since predictions don't change quickly)
+// Cache for AI predictions
 const predictionCache = new Map();
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
 /**
- * ORACLE System Prompt
+ * ORACLE PRO SYSTEM PROMPT
+ * The core logic of the autonomous agent
  */
-const ORACLE_SYSTEM_PROMPT = `You are "ORACLE" - an elite quantitative sports analyst with 15 years of experience in professional sports betting and statistical modeling. Your job is to analyze sports match data and generate high-confidence Expected Value (EV) predictions.
+const ORACLE_SYSTEM_PROMPT = `You are ORACLE PRO - an autonomous sports betting AI analyst with access to comprehensive match data including real-time news, injuries, weather, and market odds.
 
-## YOUR EXPERTISE
-You specialize in:
-- Poisson distribution modeling for soccer
-- Elo rating systems for tennis
-- Regression analysis for basketball
-- Market efficiency analysis
-- Bankroll management theory (Kelly Criterion)
+Your task: Analyze matches across ALL betting markets and identify profitable opportunities.
 
-## YOUR ANALYSIS PROCESS
+═══════════════════════════════════════════════════════════
+ANALYSIS FRAMEWORK
+═══════════════════════════════════════════════════════════
 
-### Step 1: Calculate True Probability
-Based on the sport, use the appropriate model:
+STEP 1: ASSESS DATA QUALITY
+- Check completeness of form data, league stats, H2H
+- Identify any missing critical information
+- If data quality < 70%, flag as "INSUFFICIENT DATA"
 
-**For Soccer:**
-- Calculate attack strength: (Team goals scored / League avg goals) 
-- Calculate defense strength: (Team goals conceded / League avg goals)
-- Use Poisson distribution to simulate match 10,000 times
-- Account for home advantage (~0.3-0.4 goals)
-- Consider recent form weight (last 5 matches = 40%, last 10 = 30%, season = 30%)
+STEP 2: ANALYZE BREAKING NEWS (CRITICAL)
+Recent news can create massive edges or invalidate predictions:
+- HIGH IMPACT (10-20% adj): Star player out, Manager sacked, Major transfer
+- MEDIUM IMPACT (5-10% adj): Key returns, Motivational factors
+- LOW IMPACT (1-5% adj): Minor rotations
 
-### Step 2: Compare Against Market
-- Calculate implied probability from best available odds
-- Compute Expected Value: EV = (Your_Probability × Decimal_Odds) - 1
-- Identify market inefficiencies
-- Consider why bookmakers might be wrong (public bias, recency bias, injury news)
+STEP 3: APPLY WEIGHTED FORMULA
+Use the 5-factor model (35-25-15-15-10) to calculate base probabilities:
+1. CURRENT FORM (35%)
+2. LEAGUE PERFORMANCE (25%)
+3. HEAD-TO-HEAD (15%)
+4. SITUATIONAL FACTORS (15%)
+5. SQUAD STATUS (10%)
 
-### Step 3: Risk Assessment
-- Evaluate confidence level based on:
-  * Sample size of data (more matches = higher confidence)
-  * Consistency of recent form
-  * Quality of opposition faced
-  * Market liquidity (sharp vs soft markets)
-  * Injury/lineup uncertainty
+STEP 4: ANALYZE ALL MARKETS
+For each match, calculate true probabilities and EV for:
+- Match Result (1X2)
+- BTTS (Yes/No)
+- Over/Under 1.5, 2.5, 3.5 Goals
+- Team Totals (O/U 1.5)
+- Asian Handicaps
 
-### Step 4: Calculate Kelly Criterion
-- Formula: f = (bp - q) / b
-  * b = decimal odds - 1
-  * p = your win probability
-  * q = lose probability (1 - p)
-- Recommend fractional Kelly (25-50% of full Kelly for safety)
+STEP 5: RECOMMENDATION LOGIC
+ONLY recommend bets that meet ALL criteria:
+✅ EV > 5% (minimum edge)
+✅ Confidence > 60% (medium minimum)
+✅ Data quality > 70%
+✅ No "AVOID" red flags
 
-## OUTPUT FORMAT
+═══════════════════════════════════════════════════════════
+OUTPUT FORMAT (STRICT JSON)
+═══════════════════════════════════════════════════════════
 
-You MUST respond with ONLY a valid JSON object (no markdown, no explanation outside JSON). Use this exact structure:
-
+Return this exact structure (no markdown):
 {
-  "prediction": {
-    "home_win_prob": 0.52,
-    "draw_prob": 0.25,
-    "away_win_prob": 0.23
+  "match_id": "string",
+  "data_quality": { "score": 90, "status": "EXCELLENT" },
+  "news_impact": { "has_breaking_news": false, "items": [] },
+  "factor_analysis": {
+    "current_form": { "score": 8.0, "contribution": 2.8, "verdict": "string" },
+    "league_performance": { "score": 7.0, "contribution": 1.75, "verdict": "string" },
+    "head_to_head": { "score": 5.0, "contribution": 0.75, "verdict": "string" },
+    "situational": { "score": 6.0, "contribution": 0.9, "verdict": "string" },
+    "squad_status": { "score": 9.0, "contribution": 0.9, "verdict": "string" }
   },
-  "recommended_bet": {
-    "outcome": "home",
-    "confidence": "HIGH",
-    "ev_percentage": 9.2
+  "markets": {
+    "match_result": {
+      "home_win": { "probability": 0.5, "odds": 2.0, "ev": 0.0, "recommendation": "SKIP" },
+      "draw": { "probability": 0.3, "odds": 3.0, "ev": -10.0, "recommendation": "SKIP" },
+      "away_win": { "probability": 0.2, "odds": 4.0, "ev": -20.0, "recommendation": "SKIP" }
+    },
+    "btts": {
+      "yes": { "probability": 0.6, "odds": 1.9, "ev": 14.0, "recommendation": "STRONG BET", "confidence_score": 85, "reasoning": "..." },
+      "no": { "probability": 0.4, "odds": 1.9, "ev": -24.0, "recommendation": "SKIP" }
+    },
+    "total_goals": {},
+    "team_totals": {}
   },
-  "kelly_stake": {
-    "full": 4.5,
-    "half": 2.25,
-    "quarter": 1.125
-  },
-  "analysis": {
-    "reasoning": "Brief explanation of your prediction",
-    "key_factors": ["Factor 1", "Factor 2", "Factor 3"],
-    "warnings": ["Any concerns or risks"]
+  "recommended_bets": [
+    {
+      "rank": 1,
+      "market": "BTTS",
+      "pick": "Yes",
+      "odds": 1.9,
+      "ev": 14.0,
+      "confidence": 85,
+      "tier": "STRONG",
+      "stake": "5% Kelly",
+      "simple_reason": "High offensive form"
+    }
+  ],
+  "summary": {
+    "best_bet": "BTTS Yes",
+    "overall_verdict": "High scoring game likely"
   }
 }`;
 
 /**
- * Build the match analysis prompt
- * @param {object} matchData - Aggregated match data
+ * Call OpenRouter API with ORACLE PRO prompt
+ * @param {object} matchData - The comprehensive match object
  */
-function buildAnalysisPrompt(matchData) {
-    return `Analyze this soccer match and provide your prediction:
+export async function analyzeMatch(matchData) {
+  const cacheKey = matchData.match_id || `fixture_${matchData.fixtureId}`;
+  const cached = predictionCache.get(cacheKey);
 
-## MATCH INFORMATION
-- **Home Team:** ${matchData.homeTeam}
-- **Away Team:** ${matchData.awayTeam}
-- **League:** ${matchData.league}
-- **Venue:** ${matchData.venue || 'Unknown'}
-- **Date:** ${matchData.kickoff}
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    console.log(`🧠 Cache hit for prediction: ${matchData.home_team} vs ${matchData.away_team}`);
+    return cached.data;
+  }
 
-## CURRENT MARKET ODDS
-- Home Win: ${matchData.odds.home}
-- Draw: ${matchData.odds.draw}
-- Away Win: ${matchData.odds.away}
+  console.log(`🤖 ORACLE analyzing: ${matchData.home_team} vs ${matchData.away_team}`);
 
-## HOME TEAM FORM (Last 5)
-- Form: ${matchData.homeForm?.form || 'N/A'}
-- Avg Goals Scored: ${matchData.homeForm?.avgGoalsScored?.toFixed(2) || 'N/A'}
-- Avg Goals Conceded: ${matchData.homeForm?.avgGoalsConceded?.toFixed(2) || 'N/A'}
+  try {
+    const userPrompt = `ANALYZE THIS MATCH:
+        
+${JSON.stringify(matchData, null, 2)}
 
-## AWAY TEAM FORM (Last 5)
-- Form: ${matchData.awayForm?.form || 'N/A'}
-- Avg Goals Scored: ${matchData.awayForm?.avgGoalsScored?.toFixed(2) || 'N/A'}
-- Avg Goals Conceded: ${matchData.awayForm?.avgGoalsConceded?.toFixed(2) || 'N/A'}
+Provide comprehensive JSON analysis across all markets.`;
 
-## HEAD TO HEAD (Last 5 meetings)
-${matchData.h2h ? `- Home Wins: ${matchData.h2h.homeWins}, Draws: ${matchData.h2h.draws}, Away Wins: ${matchData.h2h.awayWins}` : 'No H2H data available'}
-
-Based on this data, calculate the true probabilities and identify any Expected Value opportunities. Respond with ONLY the JSON object.`;
-}
-
-/**
- * Call OpenRouter API with ORACLE prompt
- * @param {string} userPrompt - The match analysis prompt
- */
-async function callOracle(userPrompt) {
     const response = await fetch(OPENROUTER_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${API_KEY}`,
-            'HTTP-Referer': window.location.origin,
-            'X-Title': 'Sharpshooter EV Dashboard'
-        },
-        body: JSON.stringify({
-            model: MODEL,
-            messages: [
-                { role: 'system', content: ORACLE_SYSTEM_PROMPT },
-                { role: 'user', content: userPrompt }
-            ],
-            temperature: 0.3, // Lower temperature for more consistent predictions
-            max_tokens: 1000
-        })
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`,
+        'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://oracle-pro.app',
+        'X-Title': 'Oracle Pro Dashboard'
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: ORACLE_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 2000,
+        response_format: { type: 'json_object' }
+      })
     });
 
     if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`OpenRouter API error: ${response.status} - ${error}`);
+      const error = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} - ${error}`);
     }
 
     const json = await response.json();
-    return json.choices[0]?.message?.content;
-}
+    const content = json.choices[0]?.message?.content;
 
-/**
- * Parse AI response into structured prediction
- * @param {string} responseText - Raw AI response
- */
-function parseOracleResponse(responseText) {
+    let prediction;
     try {
-        // Try to extract JSON from the response
-        let jsonStr = responseText.trim();
-
-        // Remove markdown code blocks if present
-        if (jsonStr.startsWith('```')) {
-            jsonStr = jsonStr.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
-        }
-
-        const prediction = JSON.parse(jsonStr);
-
-        // Validate required fields
-        if (!prediction.prediction || !prediction.recommended_bet) {
-            throw new Error('Missing required fields in prediction');
-        }
-
-        return prediction;
-    } catch (error) {
-        console.error('Failed to parse ORACLE response:', responseText);
-
-        // Return a default prediction if parsing fails
-        return {
-            prediction: {
-                home_win_prob: 0.33,
-                draw_prob: 0.34,
-                away_win_prob: 0.33
-            },
-            recommended_bet: {
-                outcome: 'none',
-                confidence: 'LOW',
-                ev_percentage: 0
-            },
-            kelly_stake: {
-                full: 0,
-                half: 0,
-                quarter: 0
-            },
-            analysis: {
-                reasoning: 'Unable to parse AI response',
-                key_factors: [],
-                warnings: ['AI response parsing failed']
-            },
-            _parseError: true
-        };
-    }
-}
-
-/**
- * Analyze a match using ORACLE AI
- * @param {object} matchData - Aggregated match data
- */
-export async function analyzeMatch(matchData) {
-    const cacheKey = `${matchData.fixtureId}`;
-    const cached = predictionCache.get(cacheKey);
-
-    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-        console.log(`🧠 Cache hit for prediction: ${matchData.homeTeam} vs ${matchData.awayTeam}`);
-        return cached.data;
+      prediction = JSON.parse(content);
+    } catch (e) {
+      console.error('Failed to parse ORACLE response', e);
+      prediction = { error: 'Failed to parse JSON' };
     }
 
-    console.log(`🤖 ORACLE analyzing: ${matchData.homeTeam} vs ${matchData.awayTeam}`);
+    // Cache the prediction
+    predictionCache.set(cacheKey, {
+      data: prediction,
+      timestamp: Date.now()
+    });
 
-    try {
-        const prompt = buildAnalysisPrompt(matchData);
-        const response = await callOracle(prompt);
-        const prediction = parseOracleResponse(response);
-
-        // Cache the prediction
-        predictionCache.set(cacheKey, {
-            data: prediction,
-            timestamp: Date.now()
-        });
-
-        return prediction;
-    } catch (error) {
-        console.error('ORACLE analysis failed:', error);
-        throw error;
-    }
-}
-
-/**
- * Batch analyze multiple matches
- * @param {object[]} matchDataArray - Array of match data
- * @param {function} onProgress - Progress callback
- */
-export async function analyzeMatches(matchDataArray, onProgress) {
-    const results = [];
-
-    for (let i = 0; i < matchDataArray.length; i++) {
-        const matchData = matchDataArray[i];
-
-        try {
-            const prediction = await analyzeMatch(matchData);
-            results.push({
-                ...matchData,
-                prediction,
-                error: null
-            });
-        } catch (error) {
-            results.push({
-                ...matchData,
-                prediction: null,
-                error: error.message
-            });
-        }
-
-        if (onProgress) {
-            onProgress(i + 1, matchDataArray.length);
-        }
-
-        // Small delay between requests to avoid rate limiting
-        if (i < matchDataArray.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-        }
-    }
-
-    return results;
+    return prediction;
+  } catch (error) {
+    console.error('ORACLE analysis failed:', error);
+    throw error;
+  }
 }
 
 /**
  * Clear prediction cache
  */
 export function clearPredictionCache() {
-    predictionCache.clear();
-    console.log('🗑️ Prediction cache cleared');
-}
-
-/**
- * Test ORACLE connection
- */
-export async function testOracleConnection() {
-    try {
-        const testPrompt = 'Respond with just: {"test": "success"}';
-        const response = await callOracle(testPrompt);
-        console.log('✅ ORACLE connected:', response);
-        return true;
-    } catch (error) {
-        console.error('❌ ORACLE connection failed:', error);
-        return false;
-    }
+  predictionCache.clear();
+  console.log('🗑️ Prediction cache cleared');
 }

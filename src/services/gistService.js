@@ -5,7 +5,7 @@
 
 const GIST_ID = import.meta.env.VITE_GIST_ID;
 const GITHUB_TOKEN = import.meta.env.VITE_GITHUB_TOKEN;
-const FILENAME = 'predictions.json';
+const FILENAME = 'oracle_predictions.json'; // Must match refresh-predictions.js
 
 /**
  * Read predictions from Gist
@@ -18,33 +18,31 @@ export async function readFromGist() {
     }
 
     try {
-        // Use raw URL for public read (faster, no auth needed)
-        const rawUrl = `https://gist.githubusercontent.com/raw/${GIST_ID}/${FILENAME}?t=${Date.now()}`;
+        // Use the GitHub API endpoint (more reliable than raw URL)
+        const apiUrl = `https://api.github.com/gists/${GIST_ID}`;
+        console.log('📡 Fetching predictions from Gist...');
 
-        const response = await fetch(rawUrl);
+        const response = await fetch(apiUrl, {
+            headers: {
+                'Accept': 'application/vnd.github.v3+json'
+            },
+            cache: 'no-store' // Bypass cache to get fresh data
+        });
 
         if (!response.ok) {
-            // Try the API endpoint as fallback
-            const apiUrl = `https://api.github.com/gists/${GIST_ID}`;
-            const apiResponse = await fetch(apiUrl);
-
-            if (!apiResponse.ok) {
-                throw new Error(`Gist read failed: ${apiResponse.status}`);
-            }
-
-            const gist = await apiResponse.json();
-            const content = gist.files?.[FILENAME]?.content;
-
-            if (!content) {
-                console.log('📭 Gist is empty or file not found');
-                return null;
-            }
-
-            return JSON.parse(content);
+            throw new Error(`Gist API error: ${response.status}`);
         }
 
-        const data = await response.json();
-        console.log('📥 Loaded predictions from Gist');
+        const gist = await response.json();
+        const content = gist.files?.[FILENAME]?.content;
+
+        if (!content) {
+            console.log('📭 Gist is empty or file not found');
+            return null;
+        }
+
+        const data = JSON.parse(content);
+        console.log('📥 Loaded predictions from Gist:', data.predictions?.length || 0, 'predictions');
         return data;
 
     } catch (error) {

@@ -250,6 +250,14 @@ export async function getHeadToHead(team1Id, team2Id, last = 10) {
     });
 }
 
+/**
+ * Get injuries for a specific fixture
+ * @param {number} fixtureId
+ */
+export async function getInjuries(fixtureId) {
+    return apiRequest('/injuries', { fixture: fixtureId });
+}
+
 // ============================================
 // STANDINGS ENDPOINT
 // ============================================
@@ -398,4 +406,58 @@ export async function testConnection() {
  */
 export async function getApiStatus() {
     return apiRequest('/status');
+}
+
+/**
+ * Get league statistics for weighted model
+ * @param {number} leagueId 
+ * @param {string} season 
+ */
+export async function getLeagueStats(leagueId, season = '2024') {
+    const standings = await getStandings(leagueId, season);
+
+    if (!standings || !standings.length) return null;
+
+    // Calculate league averages
+    let totalGoals = 0;
+    let totalMatches = 0;
+
+    standings.forEach(team => {
+        totalGoals += (team.all?.goals?.for || 0);
+        totalMatches += (team.all?.played || 0);
+    });
+
+    const leagueAvgGoals = totalMatches > 0 ? totalGoals / totalMatches : 1.4;
+
+    return {
+        leagueAvgGoals,
+        standings: standings.reduce((acc, team) => {
+            acc[team.team.id] = {
+                position: team.rank,
+                pointsPerGame: team.all?.played > 0 ? (team.points / team.all.played).toFixed(2) : 0,
+                goalsPerMatch: team.all?.played > 0 ? (team.all.goals.for / team.all.played).toFixed(2) : 0,
+                concededPerMatch: team.all?.played > 0 ? (team.all.goals.against / team.all.played).toFixed(2) : 0,
+                form: team.form
+            };
+            return acc;
+        }, {})
+    };
+}
+
+/**
+ * Calculate rest days between matches
+ * @param {string} lastMatchDate 
+ * @param {string} currentMatchDate 
+ */
+export function calculateRestDays(lastMatchDate, currentMatchDate = new Date()) {
+    if (!lastMatchDate) return 7; // Default to fully rested if unknown
+
+    const last = new Date(lastMatchDate);
+    const current = new Date(currentMatchDate);
+
+    // Calculate difference in days
+    const diffTime = Math.abs(current - last);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    return diffDays;
 }
