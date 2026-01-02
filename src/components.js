@@ -316,7 +316,7 @@ export function renderErrorState(errorMessage) {
         System Offline
       </h1>
       <p style="color:var(--text-secondary); max-width:400px; margin-bottom:2rem; line-height:1.6;">
-        ${errorMessage || 'Unable to load prediction data.'}
+        ${errorMessage || 'No Predictions for now. Waiting for the next refresh to get new predictions'}
       </p>
       <button class="mode-toggle-btn mode-live" id="retry-btn" style="cursor:pointer;">
         <span class="indicator"></span>

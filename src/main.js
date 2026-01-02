@@ -198,7 +198,7 @@ async function init() {
       }
     } catch (e) {
       console.warn('Gist load failed:', e);
-      if (!isAdmin) state.error = "Waiting for Oracle Pro to publish new predictions.";
+      if (!isAdmin) state.error = "No Predictions for now. Waiting for the next refresh to get new predictions";
     }
   }
 
