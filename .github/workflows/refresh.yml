@@ -6,6 +6,8 @@ on:
     - cron: '0 8 * * *'
     # 3 PM UTC+1 = 2 PM UTC
     - cron: '0 14 * * *'
+    # 10 PM UTC+1 = 9 PM UTC
+    - cron: '0 21 * * *'
   
   # Allow manual trigger
   workflow_dispatch:

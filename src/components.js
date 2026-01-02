@@ -283,6 +283,32 @@ export function renderLoadingState(progress = { current: 0, total: 0, message: '
 }
 
 export function renderErrorState(errorMessage) {
+  // Calculate time until next refresh (9 AM, 3 PM, or 10 PM UTC+1)
+  const now = new Date();
+  const utcPlus1 = new Date(now.getTime() + (1 * 60 * 60 * 1000)); // Adjust for UTC+1
+
+  const hours = utcPlus1.getUTCHours();
+  let nextRefresh;
+
+  if (hours < 9) {
+    // Before 9 AM - next is 9 AM today
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(9, 0, 0, 0);
+  } else if (hours < 15) {
+    // Before 3 PM - next is 3 PM today
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(15, 0, 0, 0);
+  } else if (hours < 22) {
+    // Before 10 PM - next is 10 PM today
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setUTCHours(22, 0, 0, 0);
+  } else {
+    // After 10 PM - next is 9 AM tomorrow
+    nextRefresh = new Date(utcPlus1);
+    nextRefresh.setDate(nextRefresh.getDate() + 1);
+    nextRefresh.setUTCHours(9, 0, 0, 0);
+  }
+
   return `
     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:70vh; text-align:center; padding: 2rem;">
       <div style="font-size:5rem; margin-bottom:1.5rem; filter: grayscale(0.3);">⚠️</div>
