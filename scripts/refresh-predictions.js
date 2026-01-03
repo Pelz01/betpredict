@@ -1,8 +1,7 @@
 /**
- * PREDICT - Autonomous Refresh Script (FREE TIER OPTIMIZED)
- * 
- * Budget: 100 requests/day
- * Strategy: EPL + La Liga only, aggressive caching, smart batching
+ * PREDICT - Autonomous Refresh Script
+ * Uses SPORTMONKS API (instead of API-Football)
+ * + Pure Algorithm Engine
  */
 
 import fs from 'fs';
@@ -28,214 +27,154 @@ try {
 } catch (e) { console.warn('⚠️ No .env file'); }
 
 // ============================================
-// CONFIGURATION - FREE TIER OPTIMIZED
+// CONFIGURATION
 // ============================================
 
-const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || process.env.VITE_API_FOOTBALL_KEY;
+const SPORTMONKS_API_KEY = process.env.SPORTMONKS_API_KEY || process.env.VITE_SPORTMONKS_API_KEY;
 const GIST_ID = process.env.GIST_ID || process.env.VITE_GIST_ID;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.VITE_GITHUB_TOKEN;
 
-const API_FOOTBALL_BASE = 'https://v3.football.api-sports.io';
+const SPORTMONKS_BASE = 'https://api.sportmonks.com/v3/football';
 
-// FREE TIER: Only EPL + La Liga (saves requests)
-const FREE_TIER_LEAGUES = [
-    { id: 39, name: 'Premier League' },
-    { id: 140, name: 'La Liga' }
+// Sportmonks League IDs (different from API-Football)
+const LEAGUES = [
+    { id: 8, name: 'Premier League' },
+    { id: 564, name: 'La Liga' },
+    { id: 384, name: 'Serie A' },
+    { id: 82, name: 'Bundesliga' },
+    { id: 301, name: 'Ligue 1' }
 ];
 
-// Cache file path
-const CACHE_FILE = path.resolve(process.cwd(), 'scripts/cache.json');
-
 // ============================================
-// FILE-BASED CACHE SYSTEM
+// SPORTMONKS API HELPERS
 // ============================================
 
-let cache = {};
+async function sportmonksRequest(endpoint, includes = []) {
+    let url = `${SPORTMONKS_BASE}${endpoint}?api_token=${SPORTMONKS_API_KEY}`;
 
-function loadCache() {
-    try {
-        if (fs.existsSync(CACHE_FILE)) {
-            cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-            console.log('📦 Cache loaded');
-        }
-    } catch (e) {
-        cache = {};
+    if (includes.length > 0) {
+        url += `&include=${includes.join(';')}`;
     }
-}
 
-function saveCache() {
-    try {
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
-    } catch (e) {
-        console.warn('⚠️ Cache save failed');
-    }
-}
+    console.log(`📡 Fetching: ${endpoint}`);
 
-function getCached(key, maxAgeMs) {
-    const item = cache[key];
-    if (!item) return null;
-    if (Date.now() - item.timestamp > maxAgeMs) {
-        delete cache[key];
-        return null;
-    }
-    return item.data;
-}
+    const response = await fetch(url);
 
-function setCache(key, data) {
-    cache[key] = { data, timestamp: Date.now() };
-}
-
-// Cache durations (in milliseconds)
-const CACHE_DURATION = {
-    fixtures: 12 * 60 * 60 * 1000,    // 12 hours
-    standings: 24 * 60 * 60 * 1000,   // 24 hours
-    odds: 4 * 60 * 60 * 1000          // 4 hours
-};
-
-// ============================================
-// API HELPERS (REQUEST TRACKING)
-// ============================================
-
-let requestCount = 0;
-const MAX_REQUESTS = 95; // Leave 5 buffer
-
-async function apiFootballRequest(endpoint, params = {}) {
-    if (requestCount >= MAX_REQUESTS) {
-        console.warn('⚠️ Request limit reached, using cached/default data');
+    if (!response.ok) {
+        const text = await response.text();
+        console.error(`API Error: ${response.status} - ${text}`);
         return [];
     }
 
-    const url = new URL(`${API_FOOTBALL_BASE}${endpoint}`);
-    Object.entries(params).forEach(([k, v]) => url.searchParams.append(k, v));
-
-    const response = await fetch(url, {
-        headers: { 'x-apisports-key': API_FOOTBALL_KEY }
-    });
-
-    requestCount++;
-    console.log(`📡 API Request #${requestCount}: ${endpoint}`);
-
-    if (!response.ok) throw new Error(`API: ${response.status}`);
     const json = await response.json();
-
-    if (json.errors && Object.keys(json.errors).length > 0) {
-        console.error('API Error:', JSON.stringify(json.errors));
-        return [];
-    }
-
-    return json.response || [];
+    return json.data || [];
 }
 
-// ============================================
-// DATA FETCHERS (CACHED)
-// ============================================
+function formatDate(date) {
+    return date.toISOString().split('T')[0];
+}
 
-async function getFixtures(leagueId, season, dateFrom, dateTo) {
-    const cacheKey = `fixtures_${leagueId}_${dateFrom}`;
-    const cached = getCached(cacheKey, CACHE_DURATION.fixtures);
-    if (cached) {
-        console.log(`📦 Cache hit: fixtures ${leagueId}`);
-        return cached;
-    }
+async function getFixtures(days = 2) {
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + days);
 
-    const data = await apiFootballRequest('/fixtures', {
-        league: leagueId,
-        season: season,
-        from: dateFrom,
-        to: dateTo
+    const start = formatDate(startDate);
+    const end = formatDate(endDate);
+
+    const fixtures = await sportmonksRequest(
+        `/fixtures/between/${start}/${end}`,
+        ['participants', 'odds', 'league', 'scores']
+    );
+
+    return fixtures || [];
+}
+
+async function getTeamStats(teamId) {
+    const fixtures = await sportmonksRequest(
+        `/fixtures/past/teams/${teamId}`,
+        ['participants', 'scores']
+    );
+    return calculateForm(fixtures?.slice(0, 10) || [], teamId);
+}
+
+function calculateForm(fixtures, teamId) {
+    let wins = 0, draws = 0, losses = 0;
+    let goalsFor = 0, goalsAgainst = 0;
+
+    fixtures.forEach(fixture => {
+        const participants = fixture.participants || [];
+        const home = participants.find(p => p.meta?.location === 'home');
+        const away = participants.find(p => p.meta?.location === 'away');
+
+        const scores = fixture.scores || [];
+        const homeScore = scores.find(s => s.description === 'CURRENT' && s.score?.participant === 'home')?.score?.goals || 0;
+        const awayScore = scores.find(s => s.description === 'CURRENT' && s.score?.participant === 'away')?.score?.goals || 0;
+
+        const isHome = home?.id === teamId;
+
+        if (isHome) {
+            goalsFor += homeScore;
+            goalsAgainst += awayScore;
+            if (homeScore > awayScore) wins++;
+            else if (homeScore < awayScore) losses++;
+            else draws++;
+        } else {
+            goalsFor += awayScore;
+            goalsAgainst += homeScore;
+            if (awayScore > homeScore) wins++;
+            else if (awayScore < homeScore) losses++;
+            else draws++;
+        }
     });
 
-    if (data.length > 0) setCache(cacheKey, data);
-    return data;
+    return { wins, draws, losses, goalsFor, goalsAgainst, matches: fixtures.length };
 }
 
-async function getStandings(leagueId, season) {
-    const cacheKey = `standings_${leagueId}_${season}`;
-    const cached = getCached(cacheKey, CACHE_DURATION.standings);
-    if (cached) {
-        console.log(`📦 Cache hit: standings ${leagueId}`);
-        return cached;
-    }
+function extractOdds(fixture) {
+    const odds = fixture.odds || [];
+    let home = 2.0, draw = 3.3, away = 3.5;
 
-    const data = await apiFootballRequest('/standings', { league: leagueId, season });
-    const standings = data[0]?.league?.standings?.[0] || [];
+    // Find 1X2 odds
+    odds.forEach(odd => {
+        const label = (odd.label || odd.name || '').toLowerCase();
+        const value = parseFloat(odd.value) || 0;
 
-    if (standings.length > 0) setCache(cacheKey, standings);
-    return standings;
-}
-
-async function getOdds(fixtureId) {
-    const cacheKey = `odds_${fixtureId}`;
-    const cached = getCached(cacheKey, CACHE_DURATION.odds);
-    if (cached) return cached;
-
-    const data = await apiFootballRequest('/odds', { fixture: fixtureId });
-    const odds = extractOdds(data);
-
-    if (odds) setCache(cacheKey, odds);
-    return odds;
-}
-
-function extractOdds(oddsData) {
-    if (!oddsData || oddsData.length === 0) return null;
-    const bookmakers = oddsData[0]?.bookmakers || [];
-
-    for (const bm of bookmakers) {
-        const market = bm.bets?.find(b => b.name === 'Match Winner');
-        if (market) {
-            const home = market.values?.find(v => v.value === 'Home')?.odd;
-            const draw = market.values?.find(v => v.value === 'Draw')?.odd;
-            const away = market.values?.find(v => v.value === 'Away')?.odd;
-            if (home && draw && away) {
-                return { home: parseFloat(home), draw: parseFloat(draw), away: parseFloat(away) };
-            }
+        if (label === '1' || label === 'home' || label.includes('home')) {
+            if (value > 1) home = value;
+        } else if (label === 'x' || label === 'draw') {
+            if (value > 1) draw = value;
+        } else if (label === '2' || label === 'away' || label.includes('away')) {
+            if (value > 1) away = value;
         }
-    }
-    return null;
+    });
+
+    return { home, draw, away };
 }
 
 // ============================================
 // DATA TRANSFORMATION
 // ============================================
 
-function transformToMatchData(fixture, standings, odds) {
-    const home = fixture.teams.home;
-    const away = fixture.teams.away;
+function transformToMatchData(fixture, homeForm, awayForm) {
+    const participants = fixture.participants || [];
+    const home = participants.find(p => p.meta?.location === 'home') || {};
+    const away = participants.find(p => p.meta?.location === 'away') || {};
 
-    const homeStanding = standings.find(s => s.team.id === home.id);
-    const awayStanding = standings.find(s => s.team.id === away.id);
-
-    const homeForm = homeStanding ? {
-        wins: homeStanding.all.win || 0,
-        draws: homeStanding.all.draw || 0,
-        losses: homeStanding.all.lose || 0,
-        goalsFor: homeStanding.all.goals?.for || 0,
-        goalsAgainst: homeStanding.all.goals?.against || 0,
-        matches: homeStanding.all.played || 0,
-        position: homeStanding.rank || 10
-    } : { wins: 2, draws: 1, losses: 2, goalsFor: 5, goalsAgainst: 5, matches: 5, position: 10 };
-
-    const awayForm = awayStanding ? {
-        wins: awayStanding.all.win || 0,
-        draws: awayStanding.all.draw || 0,
-        losses: awayStanding.all.lose || 0,
-        goalsFor: awayStanding.all.goals?.for || 0,
-        goalsAgainst: awayStanding.all.goals?.against || 0,
-        matches: awayStanding.all.played || 0,
-        position: awayStanding.rank || 10
-    } : { wins: 2, draws: 1, losses: 2, goalsFor: 5, goalsAgainst: 5, matches: 5, position: 10 };
+    const odds = extractOdds(fixture);
+    const league = fixture.league?.name || 'Unknown League';
 
     return {
-        match_id: `match_${fixture.fixture.id}`,
-        match_display: `${home.name} vs ${away.name}`,
-        league: fixture.league.name,
-        kickoff: fixture.fixture.date,
-        home_team: home.name,
-        away_team: away.name,
+        match_id: `sm_${fixture.id}`,
+        match_display: `${home.name || 'Home'} vs ${away.name || 'Away'}`,
+        league: league,
+        kickoff: fixture.starting_at || new Date().toISOString(),
+        home_team: home.name || 'Home',
+        away_team: away.name || 'Away',
         home_form: homeForm,
         away_form: awayForm,
         h2h: [],
-        odds: odds || { home: 2.0, draw: 3.3, away: 3.5 }
+        odds: odds
     };
 }
 
@@ -246,6 +185,7 @@ function transformToMatchData(fixture, standings, odds) {
 async function saveToGist(data) {
     if (!GIST_ID || !GITHUB_TOKEN) {
         console.warn('⚠️ Gist not configured');
+        console.log('📋 Output:', JSON.stringify(data, null, 2));
         return;
     }
 
@@ -266,82 +206,61 @@ async function saveToGist(data) {
 }
 
 // ============================================
-// MAIN - FREE TIER OPTIMIZED
+// MAIN
 // ============================================
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function main() {
-    console.log('🏆 PREDICT - FREE TIER MODE');
+    console.log('🏆 PREDICT - SPORTMONKS MODE');
     console.log(`📅 ${new Date().toISOString()}`);
-    console.log(`📊 Leagues: EPL + La Liga only`);
-    console.log(`💾 Request budget: ${MAX_REQUESTS}`);
 
-    loadCache();
+    if (!SPORTMONKS_API_KEY) {
+        console.error('❌ SPORTMONKS_API_KEY not configured');
+        process.exit(1);
+    }
 
     try {
-        // Historical date for free plan testing
-        const today = '2024-02-10';
-        const tomorrow = '2024-02-11';
-        const season = '2023';
-
-        // For live mode (paid plan), use:
-        // const today = new Date().toISOString().split('T')[0];
-        // const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-        // const season = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-
-        // STEP 1: Fetch fixtures from both leagues
+        // STEP 1: Fetch fixtures
         console.log('\n📡 Fetching fixtures...');
-        let allFixtures = [];
-        const standingsMap = {};
+        const fixtures = await getFixtures(2);
+        console.log(`📊 Found ${fixtures.length} fixtures`);
 
-        for (const league of FREE_TIER_LEAGUES) {
-            const fixtures = await getFixtures(league.id, season, today, tomorrow);
-            allFixtures = allFixtures.concat(fixtures);
-
-            // Get standings for this league
-            standingsMap[league.id] = await getStandings(league.id, season);
-            await sleep(200);
-        }
-
-        console.log(`📊 Found ${allFixtures.length} fixtures`);
-        console.log(`📡 Requests used: ${requestCount}/${MAX_REQUESTS}`);
-
-        if (allFixtures.length === 0) {
-            console.log('No fixtures found. Saving empty state.');
+        if (fixtures.length === 0) {
+            console.log('No fixtures found.');
             await saveToGist({
                 lastUpdated: new Date().toISOString(),
-                mode: 'FREE_TIER',
-                stats: { matches_analyzed: 0, profitable_bets: 0, requests_used: requestCount },
+                mode: 'SPORTMONKS',
+                stats: { matches_analyzed: 0, profitable_bets: 0 },
                 predictions: { high: [], medium: [], low: [] }
             });
-            saveCache();
             return;
         }
 
-        // STEP 2: Analyze matches (limit to save requests)
+        // STEP 2: Analyze matches
         console.log('\n🔍 Analyzing matches...');
         const allBets = [];
-        const limit = Math.min(allFixtures.length, 15); // Max 15 matches
+        const limit = Math.min(fixtures.length, 15);
 
         for (let i = 0; i < limit; i++) {
-            const fixture = fixtures[i] || allFixtures[i];
-            if (!fixture) continue;
+            const fixture = fixtures[i];
+            const participants = fixture.participants || [];
+            const home = participants.find(p => p.meta?.location === 'home');
+            const away = participants.find(p => p.meta?.location === 'away');
 
-            const home = fixture.teams.home;
-            const away = fixture.teams.away;
+            if (!home || !away) continue;
+
             console.log(`  [${i + 1}/${limit}] ${home.name} vs ${away.name}`);
 
             try {
-                // Get odds (with caching)
-                const odds = await getOdds(fixture.fixture.id);
-                await sleep(150);
-
-                // Get standings for this league
-                const standings = standingsMap[fixture.league.id] || [];
+                // Get team form (with rate limiting)
+                await sleep(300);
+                const homeForm = await getTeamStats(home.id);
+                await sleep(300);
+                const awayForm = await getTeamStats(away.id);
 
                 // Transform and predict
-                const matchData = transformToMatchData(fixture, standings, odds);
+                const matchData = transformToMatchData(fixture, homeForm, awayForm);
                 const prediction = predictMatch(matchData);
 
                 // Collect recommendations
@@ -375,12 +294,10 @@ async function main() {
 
         const result = {
             lastUpdated: new Date().toISOString(),
-            mode: 'FREE_TIER',
+            mode: 'SPORTMONKS',
             stats: {
                 matches_analyzed: limit,
-                profitable_bets: allBets.length,
-                requests_used: requestCount,
-                cache_hits: Object.keys(cache).length
+                profitable_bets: allBets.length
             },
             predictions: {
                 high: allBets.filter(b => b.confidence >= 75 || b.tier === 'ELITE' || b.tier === 'STRONG'),
@@ -390,19 +307,17 @@ async function main() {
         };
 
         console.log(`\n💰 Results:`);
+        console.log(`   Total bets: ${allBets.length}`);
         console.log(`   High: ${result.predictions.high.length}`);
         console.log(`   Medium: ${result.predictions.medium.length}`);
         console.log(`   Low: ${result.predictions.low.length}`);
-        console.log(`   Requests: ${requestCount}/${MAX_REQUESTS}`);
 
         // STEP 4: Save
         await saveToGist(result);
-        saveCache();
         console.log('🎉 Complete!');
 
     } catch (error) {
         console.error('❌ Fatal:', error);
-        saveCache();
         process.exit(1);
     }
 }
