@@ -40,7 +40,9 @@ try {
 
 const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || process.env.VITE_API_FOOTBALL_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || process.env.VITE_OPENROUTER_MODEL || 'anthropic/claude-sonnet-4-20250514';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || process.env.VITE_OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct:free';
+
+
 const GIST_ID = process.env.GIST_ID || process.env.VITE_GIST_ID;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.VITE_GITHUB_TOKEN;
 
@@ -313,28 +315,14 @@ async function main() {
                     match_display: `${p.meta.home_team} vs ${p.meta.away_team}`,
                     league: p.meta.league,
                     kickoff: p.meta.kickoff,
+                    reason: bet.simple_reason, // Map simple_reason to reason for UI
                     ...bet,
                     risk_factors: []
                 });
             });
         });
 
-        // DEBUG: Inject a Fake Match to prove pipeline works
-        allBets.push({
-            match_id: 'debug_test_1',
-            match_display: 'Manchester City vs Real Madrid (TEST)',
-            league: 'Champions League',
-            kickoff: new Date().toISOString(),
-            market: 'Match Result',
-            pick: 'Home Win',
-            odds: 1.95,
-            ev: 12.5,
-            confidence: 95,
-            tier: 'STRONG',
-            stake: '5% Kelly',
-            simple_reason: 'This is a test bet to verify the system pipeline is working. If you see this, the Gist update is successful.',
-            risk_factors: ['System Test']
-        });
+        // Debug match removed.
 
         allBets.sort((a, b) => b.ev - a.ev);
 
