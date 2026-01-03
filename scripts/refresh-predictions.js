@@ -64,12 +64,20 @@ async function apiFootballRequest(endpoint, params = {}) {
 
     if (!response.ok) throw new Error(`API-Football: ${response.status}`);
     const json = await response.json();
+    if (json.errors && Object.keys(json.errors).length > 0) {
+        console.error('API-Football Errors:', JSON.stringify(json.errors, null, 2));
+    }
     return json.response || [];
 }
 
 async function getFixtures() {
-    const today = new Date().toISOString().split('T')[0];
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    // HARDCODED START DATE FOR TESTING ON FREE PLAN (Current season 2025 not supported)
+    // Using a busy weekend in Feb 2024
+    const today = '2024-02-10';
+    const tomorrow = '2024-02-11';
+
+    // const today = new Date().toISOString().split('T')[0];
+    // const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
     let allFixtures = [];
     for (const leagueId of LEAGUES) {
@@ -77,7 +85,7 @@ async function getFixtures() {
             league: leagueId,
             from: today,
             to: tomorrow,
-            season: '2024'
+            season: '2023' // API-Sports 2023 encompasses Feb 2024 for most leagues
         });
         allFixtures = allFixtures.concat(fixtures);
         await sleep(300); // Rate limit
@@ -109,21 +117,9 @@ function extractBestOdds(oddsData) {
 }
 
 async function getTeamForm(teamId) {
-    const fixtures = await apiFootballRequest('/fixtures', { team: teamId, last: 5 });
-    let wins = 0, draws = 0, losses = 0, goalsFor = 0, goalsAgainst = 0;
-
-    fixtures.forEach(f => {
-        const isHome = f.teams.home.id === teamId;
-        const teamGoals = isHome ? f.goals.home : f.goals.away;
-        const oppGoals = isHome ? f.goals.away : f.goals.home;
-        goalsFor += teamGoals || 0;
-        goalsAgainst += oppGoals || 0;
-        if (teamGoals > oppGoals) wins++;
-        else if (teamGoals < oppGoals) losses++;
-        else draws++;
-    });
-
-    return { wins, draws, losses, goalsFor, goalsAgainst, matches: fixtures.length };
+    // FREE PLAN FIX: Feature 'last' (form) is not available on free tier.
+    // Returning empty stats to allow script to proceed without error.
+    return { wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, matches: 0 };
 }
 
 // ============================================
@@ -245,9 +241,15 @@ async function main() {
             return;
         }
 
-        // Step 2: Enrich & Analyze (limit to 10 for API cost)
+        // Step 2: Enrich & Analyze (limit to 2 for Free Plan Rate Limit 10/min)
         const predictions = [];
-        const limit = Math.min(fixtures.length, 10);
+        const limit = Math.min(fixtures.length, 2);
+
+        console.log('🔑 Keys Check:', {
+            hasGistID: !!GIST_ID,
+            hasToken: !!GITHUB_TOKEN,
+            gistLength: GIST_ID ? GIST_ID.length : 0
+        });
 
         for (let i = 0; i < limit; i++) {
             const f = fixtures[i];
