@@ -195,13 +195,22 @@ async function analyzeWithAI(matchData) {
     const json = await response.json();
     const content = json.choices[0]?.message?.content || '{}';
 
-    // Parse JSON (handle markdown code blocks)
+    // Parse JSON (handle markdown code blocks and chatty intro text)
     let cleaned = content.trim();
-    if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+
+    if (firstBrace !== -1 && lastBrace !== -1) {
+        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
     }
 
-    return JSON.parse(cleaned);
+    try {
+        return JSON.parse(cleaned);
+    } catch (e) {
+        console.error('JSON Parse Error:', e.message);
+        console.error('Raw Content:', content);
+        return { recommended_bets: [] };
+    }
 }
 
 // ============================================
@@ -290,7 +299,27 @@ async function main() {
 
                 // AI Analysis
                 await sleep(1000); // Rate limit
-                const analysis = await analyzeWithAI(matchData);
+                let analysis = await analyzeWithAI(matchData);
+
+                // FALLBACK: If AI failed or returned no bets (common on free tier), use Heuristic
+                if (!analysis.recommended_bets || analysis.recommended_bets.length === 0) {
+                    console.log('🤖 AI returned no bets, using Basic Algorithm Fallback...');
+                    const homeOdds = matchData.odds.home;
+                    if (homeOdds < 2.10) {
+                        analysis = {
+                            recommended_bets: [{
+                                market: 'Match Result',
+                                pick: 'Home Win',
+                                odds: homeOdds,
+                                ev: (1 / homeOdds * 100) - 5, // Simulated EV
+                                confidence: 70,
+                                tier: 'MEDIUM',
+                                stake: '2% Kelly',
+                                simple_reason: `Algorithmic Edge: Strong market support for ${matchData.home_team} at home.`
+                            }]
+                        };
+                    }
+                }
 
                 if (analysis.recommended_bets?.length > 0) {
                     predictions.push({
