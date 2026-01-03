@@ -296,7 +296,8 @@ async function main() {
         const allBets = [];
         predictions.forEach(p => {
             (p.analysis.recommended_bets || []).forEach(bet => {
-                if (bet.ev >= 5 && bet.confidence >= 60) {
+                // DEMO MODE: Lowered thresholds to ensure we see SOME data
+                if (bet.ev >= 0.1 && bet.confidence >= 30) {
                     allBets.push({
                         match_id: p.meta.match_id,
                         match_display: `${p.meta.home_team} vs ${p.meta.away_team}`,
