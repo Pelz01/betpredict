@@ -31,6 +31,6 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          # OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }} # Using default free model in script
           GIST_ID: ${{ secrets.GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
