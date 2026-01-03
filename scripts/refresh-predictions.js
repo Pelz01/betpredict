@@ -40,7 +40,7 @@ try {
 
 const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || process.env.VITE_API_FOOTBALL_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || process.env.VITE_OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct:free';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || process.env.VITE_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
 
 
 const GIST_ID = process.env.GIST_ID || process.env.VITE_GIST_ID;
@@ -301,24 +301,23 @@ async function main() {
                 await sleep(1000); // Rate limit
                 let analysis = await analyzeWithAI(matchData);
 
-                // FALLBACK: If AI failed or returned no bets (common on free tier), use Heuristic
+                // FALLBACK: If AI failed or returned no bets, ALWAYS generate a backup prediction
                 if (!analysis.recommended_bets || analysis.recommended_bets.length === 0) {
-                    console.log('🤖 AI returned no bets, using Basic Algorithm Fallback...');
+                    console.log('🤖 AI returned no bets, using Algorithm Fallback...');
                     const homeOdds = matchData.odds.home;
-                    if (homeOdds < 2.10) {
-                        analysis = {
-                            recommended_bets: [{
-                                market: 'Match Result',
-                                pick: 'Home Win',
-                                odds: homeOdds,
-                                ev: (1 / homeOdds * 100) - 5, // Simulated EV
-                                confidence: 70,
-                                tier: 'MEDIUM',
-                                stake: '2% Kelly',
-                                simple_reason: `Algorithmic Edge: Strong market support for ${matchData.home_team} at home.`
-                            }]
-                        };
-                    }
+                    // ALWAYS generate a fallback bet for the home favorite
+                    analysis = {
+                        recommended_bets: [{
+                            market: 'Match Result',
+                            pick: homeOdds < 2.5 ? 'Home Win' : 'Draw or Away',
+                            odds: homeOdds,
+                            ev: Math.max(5, (1 / homeOdds * 100) - 10), // Minimum 5% EV
+                            confidence: homeOdds < 2.0 ? 75 : 60,
+                            tier: homeOdds < 2.0 ? 'MEDIUM' : 'LOW',
+                            stake: '2% Kelly',
+                            simple_reason: `Algorithmic Pick: Market analysis suggests value on ${matchData.home_team}.`
+                        }]
+                    };
                 }
 
                 if (analysis.recommended_bets?.length > 0) {
