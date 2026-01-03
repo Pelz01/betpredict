@@ -48,7 +48,17 @@ const API_FOOTBALL_BASE = 'https://v3.football.api-sports.io';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Top 5 European Leagues
-const LEAGUES = [39, 140, 135, 78, 61]; // EPL, La Liga, Serie A, Bundesliga, Ligue 1
+const LEAGUES = [
+    39,   // Premier League
+    140,  // La Liga
+    135,  // Serie A
+    78,   // Bundesliga
+    61,   // Ligue 1
+    40,   // Championship (UK)
+    88,   // Eredivisie (NED)
+    94,   // Liga Portugal
+    253   // MLS (USA)
+];
 
 // ============================================
 // API-FOOTBALL HELPERS
@@ -136,7 +146,9 @@ ANALYSIS STEPS:
 3. Factor in home advantage and situational context (15%)
 4. Analyze market odds for inefficiencies
 
-OUTPUT: Return ONLY valid JSON with this structure:
+OUTPUT: Return ONLY valid JSON with this structure. 
+You MUST return the best available bet for the match, even if EV is low or negative. Do not return empty arrays.
+
 {
   "recommended_bets": [
     {
@@ -151,9 +163,7 @@ OUTPUT: Return ONLY valid JSON with this structure:
     }
   ],
   "news_impact": { "has_breaking_news": false }
-}
-
-If no profitable bets found (EV < 5%), return: { "recommended_bets": [] }`;
+}`;
 
 async function analyzeWithAI(matchData) {
     const response = await fetch(OPENROUTER_URL, {
@@ -296,17 +306,16 @@ async function main() {
         const allBets = [];
         predictions.forEach(p => {
             (p.analysis.recommended_bets || []).forEach(bet => {
-                // DEMO MODE: Lowered thresholds to ensure we see SOME data
-                if (bet.ev >= 0.1 && bet.confidence >= 30) {
-                    allBets.push({
-                        match_id: p.meta.match_id,
-                        match_display: `${p.meta.home_team} vs ${p.meta.away_team}`,
-                        league: p.meta.league,
-                        kickoff: p.meta.kickoff,
-                        ...bet,
-                        risk_factors: []
-                    });
-                }
+                // DEMO MODE: Push ALL bets regardless of EV to ensure data display
+                // The frontend will sort them by High/Med/Low anyway
+                allBets.push({
+                    match_id: p.meta.match_id,
+                    match_display: `${p.meta.home_team} vs ${p.meta.away_team}`,
+                    league: p.meta.league,
+                    kickoff: p.meta.kickoff,
+                    ...bet,
+                    risk_factors: []
+                });
             });
         });
 
