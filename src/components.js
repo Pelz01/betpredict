@@ -52,12 +52,12 @@ function formatTimestamp(date) {
 
 export function renderHeader(state) {
   const timestamp = formatTimestamp(state.lastUpdated);
-  const totalMatches = state.totalAnalyzed || 0;
+  const totalMatches = state.stats?.matches_analyzed || 0;
 
   // Calculate total bets found
-  const totalBets = (state.groupedMatches?.high?.length || 0) +
-    (state.groupedMatches?.medium?.length || 0) +
-    (state.groupedMatches?.low?.length || 0);
+  const totalBets = (state.groupedBets?.high?.length || 0) +
+    (state.groupedBets?.medium?.length || 0) +
+    (state.groupedBets?.low?.length || 0);
 
   const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
   const isDark = currentTheme === 'dark';
