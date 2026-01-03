@@ -298,12 +298,8 @@ export function renderErrorState(errorMessage) {
     // Before 3 PM - next is 3 PM today
     nextRefresh = new Date(utcPlus1);
     nextRefresh.setUTCHours(15, 0, 0, 0);
-  } else if (hours < 22) {
-    // Before 10 PM - next is 10 PM today
-    nextRefresh = new Date(utcPlus1);
-    nextRefresh.setUTCHours(22, 0, 0, 0);
   } else {
-    // After 10 PM - next is 9 AM tomorrow
+    // After 3 PM - next is 9 AM tomorrow
     nextRefresh = new Date(utcPlus1);
     nextRefresh.setDate(nextRefresh.getDate() + 1);
     nextRefresh.setUTCHours(9, 0, 0, 0);
@@ -318,10 +314,7 @@ export function renderErrorState(errorMessage) {
       <p style="color:var(--text-secondary); max-width:400px; margin-bottom:2rem; line-height:1.6;">
         ${errorMessage || 'No Predictions for now. Waiting for the next refresh to get new predictions'}
       </p>
-      <button class="mode-toggle-btn mode-live" id="retry-btn" style="cursor:pointer;">
-        <span class="indicator"></span>
-        <span>Retry Connection</span>
-      </button>
+      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:1rem;">Auto-refreshes at 9 AM and 3 PM daily</p>
     </div>
   `;
 }
