@@ -135,10 +135,27 @@ function extractOdds(fixture) {
     const odds = fixture.odds || [];
     let home = 2.0, draw = 3.3, away = 3.5;
 
-    // Find 1X2 odds
+    // Find 1X2 odds (Market ID 1 is usually Match Result)
+    const matchWinner = odds.find(o => o.market_id === 1 || o.name === '3Way Result' || o.name === 'Match Winner');
+
+    if (matchWinner && matchWinner.values) { // Check if it has values array (some APIs differ)
+        matchWinner.values.forEach(v => {
+            const label = (v.label || v.value || '').toLowerCase();
+            const val = parseFloat(v.odd || v.value);
+            if (label === '1' || label === 'home') home = val;
+            else if (label === 'x' || label === 'draw') draw = val;
+            else if (label === '2' || label === 'away') away = val;
+        });
+        return { home, draw, away };
+    }
+
+    // Fallback search if structure is flat array of odds
     odds.forEach(odd => {
         const label = (odd.label || odd.name || '').toLowerCase();
         const value = parseFloat(odd.value) || 0;
+
+        // Sanity check: Odds > 50 are usually errors or wrong markets
+        if (value > 50) return;
 
         if (label === '1' || label === 'home' || label.includes('home')) {
             if (value > 1) home = value;
@@ -263,25 +280,28 @@ async function main() {
                 const matchData = transformToMatchData(fixture, homeForm, awayForm);
                 const prediction = predictMatch(matchData);
 
-                // Collect recommendations
+                // Collect recommendations (MAX 1 per match to prevent clutter)
                 if (prediction.recommendations?.length > 0) {
-                    prediction.recommendations.forEach(rec => {
-                        allBets.push({
-                            match_id: prediction.match_id,
-                            match_display: prediction.match_display,
-                            league: prediction.league,
-                            kickoff: prediction.kickoff,
-                            market: rec.market,
-                            pick: rec.description,
-                            odds: rec.odds,
-                            ev: rec.ev,
-                            confidence: prediction.confidence,
-                            tier: rec.tier,
-                            stake: `${Math.round(rec.kelly_stake / 2)}% Kelly`,
-                            reason: `xG: ${prediction.expected_goals.home}-${prediction.expected_goals.away} | Prob: ${rec.probability}%`,
-                            risk_factors: [],
-                            data_quality: prediction.data_quality
-                        });
+                    const bestBet = prediction.recommendations[0]; // Take only the best bet
+
+                    // Validate odds sanity
+                    if (bestBet.odds < 1.01 || bestBet.odds > 20.0) return;
+
+                    allBets.push({
+                        match_id: prediction.match_id,
+                        match_display: prediction.match_display,
+                        league: prediction.league,
+                        kickoff: prediction.kickoff,
+                        market: bestBet.market,
+                        pick: bestBet.description,
+                        odds: bestBet.odds,
+                        ev: bestBet.ev,
+                        confidence: prediction.confidence,
+                        tier: bestBet.tier,
+                        stake: `${Math.round(bestBet.kelly_stake / 2)}% Kelly`,
+                        reason: `xG: ${prediction.expected_goals.home}-${prediction.expected_goals.away} | Prob: ${bestBet.probability}%`,
+                        risk_factors: [],
+                        data_quality: prediction.data_quality
                     });
                 }
             } catch (err) {
