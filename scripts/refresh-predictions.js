@@ -133,38 +133,40 @@ function calculateForm(fixtures, teamId) {
 
 function extractOdds(fixture) {
     const odds = fixture.odds || [];
+    // Default fallback odds (reasonable market average)
     let home = 2.0, draw = 3.3, away = 3.5;
 
-    // Find 1X2 odds (Market ID 1 is usually Match Result)
-    const matchWinner = odds.find(o => o.market_id === 1 || o.name === '3Way Result' || o.name === 'Match Winner');
+    // Sportmonks returns odds in nested structure
+    // Try to find bookmaker odds
+    if (Array.isArray(odds) && odds.length > 0) {
+        for (const bookmaker of odds) {
+            // Look for pre-match odds from any bookmaker
+            const preMatch = bookmaker.pre_match || bookmaker.odds || [];
 
-    if (matchWinner && matchWinner.values) { // Check if it has values array (some APIs differ)
-        matchWinner.values.forEach(v => {
-            const label = (v.label || v.value || '').toLowerCase();
-            const val = parseFloat(v.odd || v.value);
-            if (label === '1' || label === 'home') home = val;
-            else if (label === 'x' || label === 'draw') draw = val;
-            else if (label === '2' || label === 'away') away = val;
-        });
-        return { home, draw, away };
+            if (Array.isArray(preMatch)) {
+                for (const market of preMatch) {
+                    // Market ID 1 = Match Winner / 1X2
+                    if (market.market_id === 1 || market.id === 1) {
+                        const homeOdd = market.selections?.find(s => s.name === 'Home' || s.label === '1');
+                        const drawOdd = market.selections?.find(s => s.name === 'Draw' || s.label === 'X');
+                        const awayOdd = market.selections?.find(s => s.name === 'Away' || s.label === '2');
+
+                        if (homeOdd) home = parseFloat(homeOdd.odds || homeOdd.value) || home;
+                        if (drawOdd) draw = parseFloat(drawOdd.odds || drawOdd.value) || draw;
+                        if (awayOdd) away = parseFloat(awayOdd.odds || awayOdd.value) || away;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
-    // Fallback search if structure is flat array of odds
-    odds.forEach(odd => {
-        const label = (odd.label || odd.name || '').toLowerCase();
-        const value = parseFloat(odd.value) || 0;
+    // CRITICAL: Cap odds at reasonable values (1.01 to 15.0)
+    home = Math.min(Math.max(home, 1.01), 15.0);
+    draw = Math.min(Math.max(draw, 1.01), 15.0);
+    away = Math.min(Math.max(away, 1.01), 15.0);
 
-        // Sanity check: Odds > 50 are usually errors or wrong markets
-        if (value > 50) return;
-
-        if (label === '1' || label === 'home' || label.includes('home')) {
-            if (value > 1) home = value;
-        } else if (label === 'x' || label === 'draw') {
-            if (value > 1) draw = value;
-        } else if (label === '2' || label === 'away' || label.includes('away')) {
-            if (value > 1) away = value;
-        }
-    });
+    console.log(`  📊 Odds: H=${home.toFixed(2)} D=${draw.toFixed(2)} A=${away.toFixed(2)}`);
 
     return { home, draw, away };
 }
@@ -320,9 +322,9 @@ async function main() {
                 profitable_bets: allBets.length
             },
             predictions: {
-                high: allBets.filter(b => b.confidence >= 75 || b.tier === 'ELITE' || b.tier === 'STRONG'),
-                medium: allBets.filter(b => b.confidence >= 60 && b.confidence < 75 && b.tier === 'VALUE'),
-                low: allBets.filter(b => b.tier === 'MARGINAL')
+                high: allBets.filter(b => b.ev >= 10 && b.confidence >= 75),
+                medium: allBets.filter(b => b.ev >= 5 && b.ev < 10),
+                low: allBets.filter(b => b.ev >= 3 && b.ev < 5)
             }
         };
 
