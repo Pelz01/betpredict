@@ -295,12 +295,25 @@ export function predictMatch(matchData) {
     const odds = matchData.odds || {};
     const markets = analyzeAllMarkets(matchData, probs, xg, odds);
 
-    // Calculate confidence
-    let confidence = 65;
-    if (matchData.home_form?.matches >= 5) confidence += 5;
-    if (matchData.away_form?.matches >= 5) confidence += 5;
+    // Calculate confidence based on data quality and edge strength
+    let confidence = 55; // Lower base
+
+    // Form data quality bonus
+    const homeMatches = matchData.home_form?.matches || (matchData.home_form?.wins + matchData.home_form?.draws + matchData.home_form?.losses) || 0;
+    const awayMatches = matchData.away_form?.matches || (matchData.away_form?.wins + matchData.away_form?.draws + matchData.away_form?.losses) || 0;
+
+    if (homeMatches >= 3) confidence += 5;
+    if (homeMatches >= 5) confidence += 5;
+    if (awayMatches >= 3) confidence += 5;
+    if (awayMatches >= 5) confidence += 5;
+
+    // H2H bonus
     if (matchData.h2h?.length >= 3) confidence += 5;
-    if (Math.abs(totalScore) > 0.3) confidence += 10;
+
+    // Edge strength bonus (higher totalScore = more confident in prediction)
+    if (Math.abs(totalScore) > 0.2) confidence += 5;
+    if (Math.abs(totalScore) > 0.4) confidence += 10;
+
     confidence = clamp(confidence, 50, 95);
 
     // Filter profitable bets (EV >= 3%)
