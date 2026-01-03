@@ -319,6 +319,23 @@ async function main() {
             });
         });
 
+        // DEBUG: Inject a Fake Match to prove pipeline works
+        allBets.push({
+            match_id: 'debug_test_1',
+            match_display: 'Manchester City vs Real Madrid (TEST)',
+            league: 'Champions League',
+            kickoff: new Date().toISOString(),
+            market: 'Match Result',
+            pick: 'Home Win',
+            odds: 1.95,
+            ev: 12.5,
+            confidence: 95,
+            tier: 'STRONG',
+            stake: '5% Kelly',
+            simple_reason: 'This is a test bet to verify the system pipeline is working. If you see this, the Gist update is successful.',
+            risk_factors: ['System Test']
+        });
+
         allBets.sort((a, b) => b.ev - a.ev);
 
         const result = {
