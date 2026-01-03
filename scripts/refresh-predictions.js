@@ -1,72 +1,110 @@
 /**
- * Oracle Pro - Autonomous Refresh Script (Node.js)
- * For GitHub Actions - Self-contained, no browser dependencies
+ * PREDICT - Autonomous Refresh Script (FREE TIER OPTIMIZED)
  * 
- * Workflow:
- * 1. Fetch Fixtures from API-Football
- * 2. Enrich with Odds, Form, H2H
- * 3. Analyze with AI (OpenRouter)
- * 4. Filter Profitable Bets (EV > 5%)
- * 5. Save to Gist
+ * Budget: 100 requests/day
+ * Strategy: EPL + La Liga only, aggressive caching, smart batching
  */
 
 import fs from 'fs';
 import path from 'path';
+import { predictMatch } from './PredictionEngine.js';
 
-// Load environment variables manually (no dotenv dependency)
+// ============================================
+// ENV LOADER
+// ============================================
 try {
     const envPath = path.resolve(process.cwd(), '.env');
     if (fs.existsSync(envPath)) {
-        const envConfig = fs.readFileSync(envPath, 'utf8');
-        envConfig.split(/\r?\n/).forEach(line => {
+        fs.readFileSync(envPath, 'utf8').split(/\r?\n/).forEach(line => {
             const parts = line.split('=');
             if (parts.length >= 2) {
                 const key = parts[0].trim();
-                const value = parts.slice(1).join('=').trim().replace(/^["']|["']$/g, ''); // Remove quotes
-                if (key && !key.startsWith('#')) {
-                    process.env[key] = value;
-                }
+                const value = parts.slice(1).join('=').trim().replace(/^["']|["']$/g, '');
+                if (key && !key.startsWith('#')) process.env[key] = value;
             }
         });
-        console.log('✅ Loaded .env file');
+        console.log('✅ Loaded .env');
     }
-} catch (e) {
-    console.warn('⚠️ Could not load .env file:', e.message);
-}
+} catch (e) { console.warn('⚠️ No .env file'); }
 
 // ============================================
-// CONFIGURATION
+// CONFIGURATION - FREE TIER OPTIMIZED
 // ============================================
 
 const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || process.env.VITE_API_FOOTBALL_KEY;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || process.env.VITE_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
-
-
 const GIST_ID = process.env.GIST_ID || process.env.VITE_GIST_ID;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.VITE_GITHUB_TOKEN;
 
 const API_FOOTBALL_BASE = 'https://v3.football.api-sports.io';
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Top 5 European Leagues
-const LEAGUES = [
-    39,   // Premier League
-    140,  // La Liga
-    135,  // Serie A
-    78,   // Bundesliga
-    61,   // Ligue 1
-    40,   // Championship (UK)
-    88,   // Eredivisie (NED)
-    94,   // Liga Portugal
-    253   // MLS (USA)
+// FREE TIER: Only EPL + La Liga (saves requests)
+const FREE_TIER_LEAGUES = [
+    { id: 39, name: 'Premier League' },
+    { id: 140, name: 'La Liga' }
 ];
 
+// Cache file path
+const CACHE_FILE = path.resolve(process.cwd(), 'scripts/cache.json');
+
 // ============================================
-// API-FOOTBALL HELPERS
+// FILE-BASED CACHE SYSTEM
 // ============================================
 
+let cache = {};
+
+function loadCache() {
+    try {
+        if (fs.existsSync(CACHE_FILE)) {
+            cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+            console.log('📦 Cache loaded');
+        }
+    } catch (e) {
+        cache = {};
+    }
+}
+
+function saveCache() {
+    try {
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+    } catch (e) {
+        console.warn('⚠️ Cache save failed');
+    }
+}
+
+function getCached(key, maxAgeMs) {
+    const item = cache[key];
+    if (!item) return null;
+    if (Date.now() - item.timestamp > maxAgeMs) {
+        delete cache[key];
+        return null;
+    }
+    return item.data;
+}
+
+function setCache(key, data) {
+    cache[key] = { data, timestamp: Date.now() };
+}
+
+// Cache durations (in milliseconds)
+const CACHE_DURATION = {
+    fixtures: 12 * 60 * 60 * 1000,    // 12 hours
+    standings: 24 * 60 * 60 * 1000,   // 24 hours
+    odds: 4 * 60 * 60 * 1000          // 4 hours
+};
+
+// ============================================
+// API HELPERS (REQUEST TRACKING)
+// ============================================
+
+let requestCount = 0;
+const MAX_REQUESTS = 95; // Leave 5 buffer
+
 async function apiFootballRequest(endpoint, params = {}) {
+    if (requestCount >= MAX_REQUESTS) {
+        console.warn('⚠️ Request limit reached, using cached/default data');
+        return [];
+    }
+
     const url = new URL(`${API_FOOTBALL_BASE}${endpoint}`);
     Object.entries(params).forEach(([k, v]) => url.searchParams.append(k, v));
 
@@ -74,43 +112,71 @@ async function apiFootballRequest(endpoint, params = {}) {
         headers: { 'x-apisports-key': API_FOOTBALL_KEY }
     });
 
-    if (!response.ok) throw new Error(`API-Football: ${response.status}`);
+    requestCount++;
+    console.log(`📡 API Request #${requestCount}: ${endpoint}`);
+
+    if (!response.ok) throw new Error(`API: ${response.status}`);
     const json = await response.json();
+
     if (json.errors && Object.keys(json.errors).length > 0) {
-        console.error('API-Football Errors:', JSON.stringify(json.errors, null, 2));
+        console.error('API Error:', JSON.stringify(json.errors));
+        return [];
     }
+
     return json.response || [];
 }
 
-async function getFixtures() {
-    // HARDCODED START DATE FOR TESTING ON FREE PLAN (Current season 2025 not supported)
-    // Using a busy weekend in Feb 2024
-    const today = '2024-02-10';
-    const tomorrow = '2024-02-11';
+// ============================================
+// DATA FETCHERS (CACHED)
+// ============================================
 
-    // const today = new Date().toISOString().split('T')[0];
-    // const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-
-    let allFixtures = [];
-    for (const leagueId of LEAGUES) {
-        const fixtures = await apiFootballRequest('/fixtures', {
-            league: leagueId,
-            from: today,
-            to: tomorrow,
-            season: '2023' // API-Sports 2023 encompasses Feb 2024 for most leagues
-        });
-        allFixtures = allFixtures.concat(fixtures);
-        await sleep(300); // Rate limit
+async function getFixtures(leagueId, season, dateFrom, dateTo) {
+    const cacheKey = `fixtures_${leagueId}_${dateFrom}`;
+    const cached = getCached(cacheKey, CACHE_DURATION.fixtures);
+    if (cached) {
+        console.log(`📦 Cache hit: fixtures ${leagueId}`);
+        return cached;
     }
-    return allFixtures;
+
+    const data = await apiFootballRequest('/fixtures', {
+        league: leagueId,
+        season: season,
+        from: dateFrom,
+        to: dateTo
+    });
+
+    if (data.length > 0) setCache(cacheKey, data);
+    return data;
+}
+
+async function getStandings(leagueId, season) {
+    const cacheKey = `standings_${leagueId}_${season}`;
+    const cached = getCached(cacheKey, CACHE_DURATION.standings);
+    if (cached) {
+        console.log(`📦 Cache hit: standings ${leagueId}`);
+        return cached;
+    }
+
+    const data = await apiFootballRequest('/standings', { league: leagueId, season });
+    const standings = data[0]?.league?.standings?.[0] || [];
+
+    if (standings.length > 0) setCache(cacheKey, standings);
+    return standings;
 }
 
 async function getOdds(fixtureId) {
-    const odds = await apiFootballRequest('/odds', { fixture: fixtureId });
-    return extractBestOdds(odds);
+    const cacheKey = `odds_${fixtureId}`;
+    const cached = getCached(cacheKey, CACHE_DURATION.odds);
+    if (cached) return cached;
+
+    const data = await apiFootballRequest('/odds', { fixture: fixtureId });
+    const odds = extractOdds(data);
+
+    if (odds) setCache(cacheKey, odds);
+    return odds;
 }
 
-function extractBestOdds(oddsData) {
+function extractOdds(oddsData) {
     if (!oddsData || oddsData.length === 0) return null;
     const bookmakers = oddsData[0]?.bookmakers || [];
 
@@ -128,89 +194,49 @@ function extractBestOdds(oddsData) {
     return null;
 }
 
-async function getTeamForm(teamId) {
-    // FREE PLAN FIX: Feature 'last' (form) is not available on free tier.
-    // Returning empty stats to allow script to proceed without error.
-    return { wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, matches: 0 };
-}
-
 // ============================================
-// ORACLE AI ANALYSIS
+// DATA TRANSFORMATION
 // ============================================
 
-const ORACLE_PROMPT = `You are ORACLE PRO - an autonomous sports betting AI.
+function transformToMatchData(fixture, standings, odds) {
+    const home = fixture.teams.home;
+    const away = fixture.teams.away;
 
-TASK: Analyze the match data and return profitable betting opportunities (EV > 5%).
+    const homeStanding = standings.find(s => s.team.id === home.id);
+    const awayStanding = standings.find(s => s.team.id === away.id);
 
-ANALYSIS STEPS:
-1. Evaluate team form (35% weight)
-2. Consider head-to-head if available (15%)
-3. Factor in home advantage and situational context (15%)
-4. Analyze market odds for inefficiencies
+    const homeForm = homeStanding ? {
+        wins: homeStanding.all.win || 0,
+        draws: homeStanding.all.draw || 0,
+        losses: homeStanding.all.lose || 0,
+        goalsFor: homeStanding.all.goals?.for || 0,
+        goalsAgainst: homeStanding.all.goals?.against || 0,
+        matches: homeStanding.all.played || 0,
+        position: homeStanding.rank || 10
+    } : { wins: 2, draws: 1, losses: 2, goalsFor: 5, goalsAgainst: 5, matches: 5, position: 10 };
 
-OUTPUT: Return ONLY valid JSON with this structure. 
-You MUST return the best available bet for the match, even if EV is low or negative. Do not return empty arrays.
+    const awayForm = awayStanding ? {
+        wins: awayStanding.all.win || 0,
+        draws: awayStanding.all.draw || 0,
+        losses: awayStanding.all.lose || 0,
+        goalsFor: awayStanding.all.goals?.for || 0,
+        goalsAgainst: awayStanding.all.goals?.against || 0,
+        matches: awayStanding.all.played || 0,
+        position: awayStanding.rank || 10
+    } : { wins: 2, draws: 1, losses: 2, goalsFor: 5, goalsAgainst: 5, matches: 5, position: 10 };
 
-{
-  "recommended_bets": [
-    {
-      "market": "Match Result",
-      "pick": "Home Win",
-      "odds": 1.85,
-      "ev": 8.5,
-      "confidence": 75,
-      "tier": "STRONG",
-      "stake": "3% Kelly",
-      "simple_reason": "Strong home form + weak away defense"
-    }
-  ],
-  "news_impact": { "has_breaking_news": false }
-}`;
-
-async function analyzeWithAI(matchData) {
-    const response = await fetch(OPENROUTER_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-            'HTTP-Referer': 'https://oracle-pro.app',
-            'X-Title': 'Oracle Pro'
-        },
-        body: JSON.stringify({
-            model: OPENROUTER_MODEL,
-            messages: [
-                { role: 'system', content: ORACLE_PROMPT },
-                { role: 'user', content: `ANALYZE:\n${JSON.stringify(matchData, null, 2)}` }
-            ],
-            temperature: 0.2,
-            max_tokens: 1500
-        })
-    });
-
-    if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`OpenRouter: ${response.status} - ${err}`);
-    }
-
-    const json = await response.json();
-    const content = json.choices[0]?.message?.content || '{}';
-
-    // Parse JSON (handle markdown code blocks and chatty intro text)
-    let cleaned = content.trim();
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-
-    if (firstBrace !== -1 && lastBrace !== -1) {
-        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-    }
-
-    try {
-        return JSON.parse(cleaned);
-    } catch (e) {
-        console.error('JSON Parse Error:', e.message);
-        console.error('Raw Content:', content);
-        return { recommended_bets: [] };
-    }
+    return {
+        match_id: `match_${fixture.fixture.id}`,
+        match_display: `${home.name} vs ${away.name}`,
+        league: fixture.league.name,
+        kickoff: fixture.fixture.date,
+        home_team: home.name,
+        away_team: away.name,
+        home_form: homeForm,
+        away_form: awayForm,
+        h2h: [],
+        odds: odds || { home: 2.0, draw: 3.3, away: 3.5 }
+    };
 }
 
 // ============================================
@@ -219,7 +245,7 @@ async function analyzeWithAI(matchData) {
 
 async function saveToGist(data) {
     if (!GIST_ID || !GITHUB_TOKEN) {
-        console.warn('⚠️ Gist not configured, skipping save');
+        console.warn('⚠️ Gist not configured');
         return;
     }
 
@@ -231,9 +257,7 @@ async function saveToGist(data) {
             'Accept': 'application/vnd.github.v3+json'
         },
         body: JSON.stringify({
-            files: {
-                'oracle_predictions.json': { content: JSON.stringify(data, null, 2) }
-            }
+            files: { 'oracle_predictions.json': { content: JSON.stringify(data, null, 2) } }
         })
     });
 
@@ -242,139 +266,143 @@ async function saveToGist(data) {
 }
 
 // ============================================
-// MAIN ORCHESTRATOR
+// MAIN - FREE TIER OPTIMIZED
 // ============================================
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function main() {
-    console.log('🏆 Oracle Pro - Starting...');
+    console.log('🏆 PREDICT - FREE TIER MODE');
     console.log(`📅 ${new Date().toISOString()}`);
+    console.log(`📊 Leagues: EPL + La Liga only`);
+    console.log(`💾 Request budget: ${MAX_REQUESTS}`);
+
+    loadCache();
 
     try {
-        // Step 1: Fetch Fixtures
-        console.log('📡 Fetching fixtures...');
-        const fixtures = await getFixtures();
-        console.log(`📊 Found ${fixtures.length} fixtures`);
+        // Historical date for free plan testing
+        const today = '2024-02-10';
+        const tomorrow = '2024-02-11';
+        const season = '2023';
 
-        if (fixtures.length === 0) {
-            console.log('No fixtures found. Exiting.');
+        // For live mode (paid plan), use:
+        // const today = new Date().toISOString().split('T')[0];
+        // const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+        // const season = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+
+        // STEP 1: Fetch fixtures from both leagues
+        console.log('\n📡 Fetching fixtures...');
+        let allFixtures = [];
+        const standingsMap = {};
+
+        for (const league of FREE_TIER_LEAGUES) {
+            const fixtures = await getFixtures(league.id, season, today, tomorrow);
+            allFixtures = allFixtures.concat(fixtures);
+
+            // Get standings for this league
+            standingsMap[league.id] = await getStandings(league.id, season);
+            await sleep(200);
+        }
+
+        console.log(`📊 Found ${allFixtures.length} fixtures`);
+        console.log(`📡 Requests used: ${requestCount}/${MAX_REQUESTS}`);
+
+        if (allFixtures.length === 0) {
+            console.log('No fixtures found. Saving empty state.');
+            await saveToGist({
+                lastUpdated: new Date().toISOString(),
+                mode: 'FREE_TIER',
+                stats: { matches_analyzed: 0, profitable_bets: 0, requests_used: requestCount },
+                predictions: { high: [], medium: [], low: [] }
+            });
+            saveCache();
             return;
         }
 
-        // Step 2: Enrich & Analyze (limit to 2 for Free Plan Rate Limit 10/min)
-        const predictions = [];
-        const limit = Math.min(fixtures.length, 2);
-
-        console.log('🔑 Keys Check:', {
-            hasGistID: !!GIST_ID,
-            hasToken: !!GITHUB_TOKEN,
-            gistLength: GIST_ID ? GIST_ID.length : 0
-        });
+        // STEP 2: Analyze matches (limit to save requests)
+        console.log('\n🔍 Analyzing matches...');
+        const allBets = [];
+        const limit = Math.min(allFixtures.length, 15); // Max 15 matches
 
         for (let i = 0; i < limit; i++) {
-            const f = fixtures[i];
-            const home = f.teams.home;
-            const away = f.teams.away;
-            console.log(`🔍 [${i + 1}/${limit}] ${home.name} vs ${away.name}`);
+            const fixture = fixtures[i] || allFixtures[i];
+            if (!fixture) continue;
+
+            const home = fixture.teams.home;
+            const away = fixture.teams.away;
+            console.log(`  [${i + 1}/${limit}] ${home.name} vs ${away.name}`);
 
             try {
-                // Get enriched data
-                const [odds, homeForm, awayForm] = await Promise.all([
-                    getOdds(f.fixture.id).catch(() => ({ home: 2.0, draw: 3.3, away: 3.0 })),
-                    getTeamForm(home.id).catch(() => ({})),
-                    getTeamForm(away.id).catch(() => ({}))
-                ]);
+                // Get odds (with caching)
+                const odds = await getOdds(fixture.fixture.id);
+                await sleep(150);
 
-                const matchData = {
-                    match_id: `match_${f.fixture.id}`,
-                    home_team: home.name,
-                    away_team: away.name,
-                    league: f.league.name,
-                    kickoff: f.fixture.date,
-                    odds: odds || { home: 2.0, draw: 3.3, away: 3.0 },
-                    home_form: homeForm,
-                    away_form: awayForm
-                };
+                // Get standings for this league
+                const standings = standingsMap[fixture.league.id] || [];
 
-                // AI Analysis
-                await sleep(1000); // Rate limit
-                let analysis = await analyzeWithAI(matchData);
+                // Transform and predict
+                const matchData = transformToMatchData(fixture, standings, odds);
+                const prediction = predictMatch(matchData);
 
-                // FALLBACK: If AI failed or returned no bets, ALWAYS generate a backup prediction
-                if (!analysis.recommended_bets || analysis.recommended_bets.length === 0) {
-                    console.log('🤖 AI returned no bets, using Algorithm Fallback...');
-                    const homeOdds = matchData.odds.home;
-                    // ALWAYS generate a fallback bet for the home favorite
-                    analysis = {
-                        recommended_bets: [{
-                            market: 'Match Result',
-                            pick: homeOdds < 2.5 ? 'Home Win' : 'Draw or Away',
-                            odds: homeOdds,
-                            ev: Math.max(5, (1 / homeOdds * 100) - 10), // Minimum 5% EV
-                            confidence: homeOdds < 2.0 ? 75 : 60,
-                            tier: homeOdds < 2.0 ? 'MEDIUM' : 'LOW',
-                            stake: '2% Kelly',
-                            simple_reason: `Algorithmic Pick: Market analysis suggests value on ${matchData.home_team}.`
-                        }]
-                    };
-                }
-
-                if (analysis.recommended_bets?.length > 0) {
-                    predictions.push({
-                        meta: matchData,
-                        analysis
+                // Collect recommendations
+                if (prediction.recommendations?.length > 0) {
+                    prediction.recommendations.forEach(rec => {
+                        allBets.push({
+                            match_id: prediction.match_id,
+                            match_display: prediction.match_display,
+                            league: prediction.league,
+                            kickoff: prediction.kickoff,
+                            market: rec.market,
+                            pick: rec.description,
+                            odds: rec.odds,
+                            ev: rec.ev,
+                            confidence: prediction.confidence,
+                            tier: rec.tier,
+                            stake: `${Math.round(rec.kelly_stake / 2)}% Kelly`,
+                            reason: `xG: ${prediction.expected_goals.home}-${prediction.expected_goals.away} | Prob: ${rec.probability}%`,
+                            risk_factors: [],
+                            data_quality: prediction.data_quality
+                        });
                     });
                 }
-
             } catch (err) {
-                console.error(`❌ Failed: ${home.name} vs ${away.name}:`, err.message);
+                console.error(`  ❌ Error: ${err.message}`);
             }
         }
 
-        // Step 3: Process & Filter
-        const allBets = [];
-        predictions.forEach(p => {
-            (p.analysis.recommended_bets || []).forEach(bet => {
-                // DEMO MODE: Push ALL bets regardless of EV to ensure data display
-                // The frontend will sort them by High/Med/Low anyway
-                allBets.push({
-                    match_id: p.meta.match_id,
-                    match_display: `${p.meta.home_team} vs ${p.meta.away_team}`,
-                    league: p.meta.league,
-                    kickoff: p.meta.kickoff,
-                    reason: bet.simple_reason, // Map simple_reason to reason for UI
-                    ...bet,
-                    risk_factors: []
-                });
-            });
-        });
-
-        // Debug match removed.
-
+        // STEP 3: Sort and categorize
         allBets.sort((a, b) => b.ev - a.ev);
 
         const result = {
             lastUpdated: new Date().toISOString(),
+            mode: 'FREE_TIER',
             stats: {
-                matches_analyzed: predictions.length,
-                profitable_bets: allBets.length
+                matches_analyzed: limit,
+                profitable_bets: allBets.length,
+                requests_used: requestCount,
+                cache_hits: Object.keys(cache).length
             },
             predictions: {
-                high: allBets.filter(b => b.confidence >= 80),
-                medium: allBets.filter(b => b.confidence >= 60 && b.confidence < 80),
-                low: []
+                high: allBets.filter(b => b.confidence >= 75 || b.tier === 'ELITE' || b.tier === 'STRONG'),
+                medium: allBets.filter(b => b.confidence >= 60 && b.confidence < 75 && b.tier === 'VALUE'),
+                low: allBets.filter(b => b.tier === 'MARGINAL')
             }
         };
 
-        console.log(`💰 Found ${allBets.length} profitable bets`);
+        console.log(`\n💰 Results:`);
+        console.log(`   High: ${result.predictions.high.length}`);
+        console.log(`   Medium: ${result.predictions.medium.length}`);
+        console.log(`   Low: ${result.predictions.low.length}`);
+        console.log(`   Requests: ${requestCount}/${MAX_REQUESTS}`);
 
-        // Step 4: Save
+        // STEP 4: Save
         await saveToGist(result);
+        saveCache();
         console.log('🎉 Complete!');
 
     } catch (error) {
         console.error('❌ Fatal:', error);
+        saveCache();
         process.exit(1);
     }
 }
